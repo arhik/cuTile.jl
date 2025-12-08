@@ -298,6 +298,12 @@ function emit_known_call!(tr::Translation, @nospecialize(func),
         return emit_store!(tr, args, result_type)
     elseif haskey(CUTILE_INTRINSICS, :num_blocks) && func === CUTILE_INTRINSICS[:num_blocks]
         return emit_num_blocks!(tr, args, result_type)
+    elseif haskey(CUTILE_INTRINSICS, :tile_add) && func === CUTILE_INTRINSICS[:tile_add]
+        return emit_tile_add!(tr, args, result_type)
+    elseif haskey(CUTILE_INTRINSICS, :tile_sub) && func === CUTILE_INTRINSICS[:tile_sub]
+        return emit_tile_sub!(tr, args, result_type)
+    elseif haskey(CUTILE_INTRINSICS, :tile_mul) && func === CUTILE_INTRINSICS[:tile_mul]
+        return emit_tile_mul!(tr, args, result_type)
     end
 
     # Core intrinsics that we can skip
@@ -310,31 +316,14 @@ function emit_known_call!(tr::Translation, @nospecialize(func),
         return nothing
     end
 
-    # Handle result type for non-void functions
-    res_type = result_type !== Nothing ? tile_type_for_julia!(tr, result_type) : nothing
-
-    # Julia intrinsics for arithmetic
-    if func === Base.add_float && res_type !== nothing
-        return emit_add!(tr, args, result_type, res_type)
-    elseif func === Base.sub_float && res_type !== nothing
-        return emit_sub!(tr, args, result_type, res_type)
-    elseif func === Base.mul_float && res_type !== nothing
-        return emit_mul!(tr, args, result_type, res_type)
-    elseif func === Base.add_int && res_type !== nothing
-        return emit_add!(tr, args, result_type, res_type)
-    elseif func === Base.sub_int && res_type !== nothing
-        return emit_sub!(tr, args, result_type, res_type)
-    elseif func === Base.mul_int && res_type !== nothing
-        return emit_mul!(tr, args, result_type, res_type)
-    end
-
-    # High-level arithmetic (might be inlined to intrinsics)
-    if func === Base.:(+) && res_type !== nothing
-        return emit_add!(tr, args, result_type, res_type)
-    elseif func === Base.:(-) && res_type !== nothing
-        return emit_sub!(tr, args, result_type, res_type)
-    elseif func === Base.:(*) && res_type !== nothing
-        return emit_mul!(tr, args, result_type, res_type)
+    # Arithmetic operations - all go through tile emitters
+    # (In Tile IR, even scalars are 0D tiles)
+    if func === Base.:(+) || func === Base.add_float || func === Base.add_int
+        return emit_tile_add!(tr, args, result_type)
+    elseif func === Base.:(-) || func === Base.sub_float || func === Base.sub_int
+        return emit_tile_sub!(tr, args, result_type)
+    elseif func === Base.:(*) || func === Base.mul_float || func === Base.mul_int
+        return emit_tile_mul!(tr, args, result_type)
     end
 
     @warn "Unknown function call" func args
@@ -609,6 +598,150 @@ function emit_store!(tr::Translation, args::AbstractVector, @nospecialize(result
 end
 
 #=============================================================================
+ Tile Arithmetic Emitters
+=============================================================================#
+
+"""
+    emit_tile_add!(tr, args, result_type) -> Value
+
+Emit AddFOp/AddIOp for tile_add(a, b).
+"""
+function emit_tile_add!(tr::Translation, args::AbstractVector, @nospecialize(result_type))
+    cb = tr.code_builder
+
+    if length(args) != 2
+        error("tile_add() requires exactly 2 arguments")
+    end
+
+    lhs = resolve_value(tr, args[1])
+    rhs = resolve_value(tr, args[2])
+
+    if lhs === nothing || rhs === nothing
+        error("Cannot resolve operands for tile_add()")
+    end
+
+    # Get the type from the first operand (they should match)
+    tile_type = get_value_type(tr, lhs)
+    if tile_type === nothing
+        error("Cannot determine tile type for tile_add()")
+    end
+
+    # Determine if float or int based on result_type
+    elem_type = extract_tile_element_type(result_type)
+    if elem_type <: AbstractFloat
+        result = encode_AddFOp!(cb, tile_type, lhs, rhs)
+    else
+        result = encode_AddIOp!(cb, tile_type, lhs, rhs)
+    end
+
+    set_value_type!(tr, result, tile_type)
+    return result
+end
+
+"""
+    emit_tile_sub!(tr, args, result_type) -> Value
+
+Emit SubFOp/SubIOp for tile_sub(a, b).
+"""
+function emit_tile_sub!(tr::Translation, args::AbstractVector, @nospecialize(result_type))
+    cb = tr.code_builder
+
+    if length(args) != 2
+        error("tile_sub() requires exactly 2 arguments")
+    end
+
+    lhs = resolve_value(tr, args[1])
+    rhs = resolve_value(tr, args[2])
+
+    if lhs === nothing || rhs === nothing
+        error("Cannot resolve operands for tile_sub()")
+    end
+
+    tile_type = get_value_type(tr, lhs)
+    if tile_type === nothing
+        error("Cannot determine tile type for tile_sub()")
+    end
+
+    elem_type = extract_tile_element_type(result_type)
+    if elem_type <: AbstractFloat
+        result = encode_SubFOp!(cb, tile_type, lhs, rhs)
+    else
+        result = encode_SubIOp!(cb, tile_type, lhs, rhs)
+    end
+
+    set_value_type!(tr, result, tile_type)
+    return result
+end
+
+"""
+    emit_tile_mul!(tr, args, result_type) -> Value
+
+Emit MulFOp/MulIOp for tile_mul(a, b).
+"""
+function emit_tile_mul!(tr::Translation, args::AbstractVector, @nospecialize(result_type))
+    cb = tr.code_builder
+
+    if length(args) != 2
+        error("tile_mul() requires exactly 2 arguments")
+    end
+
+    lhs = resolve_value(tr, args[1])
+    rhs = resolve_value(tr, args[2])
+
+    if lhs === nothing || rhs === nothing
+        error("Cannot resolve operands for tile_mul()")
+    end
+
+    tile_type = get_value_type(tr, lhs)
+    if tile_type === nothing
+        error("Cannot determine tile type for tile_mul()")
+    end
+
+    elem_type = extract_tile_element_type(result_type)
+    if elem_type <: AbstractFloat
+        result = encode_MulFOp!(cb, tile_type, lhs, rhs)
+    else
+        result = encode_MulIOp!(cb, tile_type, lhs, rhs)
+    end
+
+    set_value_type!(tr, result, tile_type)
+    return result
+end
+
+"""
+    extract_tile_element_type(result_type) -> Type
+
+Extract the element type from a Tile{T, Shape} result type.
+Handles both fully specified types (Tile{Float32, (16,)}) and
+partial types (Tile{Float32} which is a UnionAll).
+"""
+function extract_tile_element_type(@nospecialize(result_type))
+    # Handle Core.Const wrapper
+    if result_type isa Core.Const
+        result_type = typeof(result_type.val)
+    end
+
+    # Check if it's a fully specified Tile type
+    if result_type isa DataType && result_type.name.name === :Tile
+        return result_type.parameters[1]
+    end
+
+    # Handle partial Tile{T} (UnionAll where Shape is not specified)
+    if result_type isa UnionAll
+        body = result_type.body
+        if body isa DataType && body.name.name === :Tile && length(body.parameters) >= 1
+            elem = body.parameters[1]
+            if elem isa Type || elem isa DataType
+                return elem
+            end
+        end
+    end
+
+    # Default to Float32
+    return Float32
+end
+
+#=============================================================================
  Helper functions for extracting constants
 =============================================================================#
 
@@ -638,99 +771,6 @@ function extract_constant_tuple(@nospecialize(val))
         return val.value
     end
     return nothing
-end
-
-"""
-    emit_add!(tr, args, result_type, res_type) -> Value
-
-Emit an addition operation.
-"""
-function emit_add!(tr::Translation, args::AbstractVector,
-                   @nospecialize(result_type), res_type::TypeId)
-    cb = tr.code_builder
-
-    if length(args) != 2
-        error("Addition requires exactly 2 arguments")
-    end
-
-    lhs = resolve_value(tr, args[1])
-    rhs = resolve_value(tr, args[2])
-
-    if lhs === nothing || rhs === nothing
-        error("Cannot resolve operands for addition")
-    end
-
-    # Use the type of the first operand if available (for tile operations)
-    # This ensures tile operations use tile types, not scalar types
-    actual_type = get_value_type(tr, lhs)
-    if actual_type === nothing
-        actual_type = res_type
-    end
-
-    if is_float_type(result_type)
-        result = encode_AddFOp!(cb, actual_type, lhs, rhs)
-    else
-        result = encode_AddIOp!(cb, actual_type, lhs, rhs)
-    end
-
-    # Track the result type
-    set_value_type!(tr, result, actual_type)
-    return result
-end
-
-"""
-    emit_sub!(tr, args, result_type, res_type) -> Value
-
-Emit a subtraction operation.
-"""
-function emit_sub!(tr::Translation, args::AbstractVector,
-                   @nospecialize(result_type), res_type::TypeId)
-    cb = tr.code_builder
-
-    if length(args) == 1
-        # Unary negation - not yet implemented
-        error("Unary negation not yet supported")
-    end
-
-    lhs = resolve_value(tr, args[1])
-    rhs = resolve_value(tr, args[2])
-
-    if lhs === nothing || rhs === nothing
-        error("Cannot resolve operands for subtraction")
-    end
-
-    if is_float_type(result_type)
-        return encode_SubFOp!(cb, res_type, lhs, rhs)
-    else
-        return encode_SubIOp!(cb, res_type, lhs, rhs)
-    end
-end
-
-"""
-    emit_mul!(tr, args, result_type, res_type) -> Value
-
-Emit a multiplication operation.
-"""
-function emit_mul!(tr::Translation, args::AbstractVector,
-                   @nospecialize(result_type), res_type::TypeId)
-    cb = tr.code_builder
-
-    if length(args) != 2
-        error("Multiplication requires exactly 2 arguments")
-    end
-
-    lhs = resolve_value(tr, args[1])
-    rhs = resolve_value(tr, args[2])
-
-    if lhs === nothing || rhs === nothing
-        error("Cannot resolve operands for multiplication")
-    end
-
-    if is_float_type(result_type)
-        return encode_MulFOp!(cb, res_type, lhs, rhs)
-    else
-        return encode_MulIOp!(cb, res_type, lhs, rhs)
-    end
 end
 
 """

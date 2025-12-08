@@ -191,6 +191,40 @@ function _tile_type_for_julia!(tr::Translation, @nospecialize(T::Type))
         return tile_type!(tt, ptr_type, Int[])
     end
 
+    # Tile{T, Shape} -> tile type with appropriate dtype and shape
+    if T isa DataType && T.name.name === :Tile && length(T.parameters) >= 1
+        elem_type = T.parameters[1]
+        elem_dtype = julia_to_tile_dtype!(tt, elem_type)
+        # Extract shape from type parameter if available
+        if length(T.parameters) >= 2 && T.parameters[2] isa Tuple
+            shape = collect(Int, T.parameters[2])
+        else
+            # Default shape if not specified
+            shape = Int[16]
+        end
+        return tile_type!(tt, elem_dtype, shape)
+    end
+
+    # Also handle UnionAll (partial type like Tile{Float32} without shape)
+    if T isa UnionAll
+        # Unwrap to get the body
+        body = T
+        while body isa UnionAll
+            body = body.body
+        end
+        if body isa DataType && body.name.name === :Tile
+            # Get element type from the fixed parameter
+            if T isa UnionAll && T.body isa DataType && length(T.body.parameters) >= 1
+                first_param = T.body.parameters[1]
+                if first_param isa Type || first_param isa DataType
+                    elem_dtype = julia_to_tile_dtype!(tt, first_param)
+                    # Shape is unknown, use default
+                    return tile_type!(tt, elem_dtype, Int[16])
+                end
+            end
+        end
+    end
+
     error("Unsupported Julia type for Tile IR: $T")
 end
 
