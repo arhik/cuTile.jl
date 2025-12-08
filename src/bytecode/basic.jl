@@ -118,7 +118,12 @@ end
 ConstantTable() = ConstantTable(Dict{Vector{UInt8}, ConstantId}(), 0)
 
 function dense_constant!(table::ConstantTable, data::Vector{UInt8})
-    get!(table.constants, data) do
+    # Encode constant with length prefix (matches Python's encoding)
+    encoded = UInt8[]
+    encode_varint!(encoded, length(data))
+    append!(encoded, data)
+
+    get!(table.constants, encoded) do
         id = table.next_id
         table.next_id += 1
         ConstantId(id)

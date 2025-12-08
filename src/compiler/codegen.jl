@@ -471,15 +471,19 @@ function emit_load!(tr::Translation, args::AbstractVector, @nospecialize(result_
     scalar_i32 = tile_type!(tt, I32(tt), Int[])
     scalar_i64 = tile_type!(tt, I64(tt), Int[])
 
-    # Get grid size and use it as size (this gives us a dynamic value)
-    # Multiply by tile_size to get total element count
+    # Get grid size and multiply by tile_size to get array size
     nb_x, _, _ = encode_GetNumTileBlocksOp!(cb, scalar_i32, scalar_i32, scalar_i32)
 
-    # For now, use nb_x directly - in real code we'd convert to i64 and multiply
-    # TensorView needs i64 values, but some Tile IR implementations accept i32
-    # Use the i32 value for now - if this fails, we need type conversion ops
-    size_val = nb_x
-    stride_val = nb_x  # Use same value as placeholder
+    # Create tile_size constant
+    tile_size_bytes = reinterpret(UInt8, [Int32(tile_shape[1])])
+    tile_size_val = encode_ConstantOp!(cb, scalar_i32, collect(tile_size_bytes))
+
+    # Compute array size = grid_size * tile_size
+    size_val = encode_MulIOp!(cb, scalar_i32, nb_x, tile_size_val)
+
+    # Stride is 1 for contiguous arrays
+    stride_bytes = reinterpret(UInt8, [Int32(1)])
+    stride_val = encode_ConstantOp!(cb, scalar_i32, collect(stride_bytes))
 
     # Create tensor view from pointer
     tensor_view = encode_MakeTensorViewOp!(cb, tv_type, array_val, [size_val], [stride_val])
@@ -571,10 +575,19 @@ function emit_store!(tr::Translation, args::AbstractVector, @nospecialize(result
     # For tensor view, we need size and stride values
     scalar_i32 = tile_type!(tt, I32(tt), Int[])
 
-    # Get grid size as proxy for array size (same pattern as load)
+    # Get grid size and multiply by tile_size to get array size
     nb_x, _, _ = encode_GetNumTileBlocksOp!(cb, scalar_i32, scalar_i32, scalar_i32)
-    size_val = nb_x
-    stride_val = nb_x
+
+    # Create tile_size constant
+    tile_size_bytes = reinterpret(UInt8, [Int32(tile_shape[1])])
+    tile_size_val = encode_ConstantOp!(cb, scalar_i32, collect(tile_size_bytes))
+
+    # Compute array size = grid_size * tile_size
+    size_val = encode_MulIOp!(cb, scalar_i32, nb_x, tile_size_val)
+
+    # Stride is 1 for contiguous arrays
+    stride_bytes = reinterpret(UInt8, [Int32(1)])
+    stride_val = encode_ConstantOp!(cb, scalar_i32, collect(stride_bytes))
 
     # Create tensor view from pointer
     tensor_view = encode_MakeTensorViewOp!(cb, tv_type, array_val, [size_val], [stride_val])

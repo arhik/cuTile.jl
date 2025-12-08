@@ -43,8 +43,8 @@ module Opcode
     const MakeTensorViewOp = 67
     const MakeTokenOp = 68
     # ...
-    const MulFOp = 73
-    const MulIOp = 74
+    const MulFOp = 76
+    const MulIOp = 78
     # ...
     const ReturnOp = 92
     # ...
