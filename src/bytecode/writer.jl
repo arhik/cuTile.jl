@@ -1,0 +1,396 @@
+# Bytecode file writer - handles sections and overall structure
+
+include("types.jl")
+
+# Bytecode version
+const BYTECODE_VERSION = (13, 1, 0)
+
+# Magic number
+const MAGIC = UInt8[0x7f, 0x54, 0x69, 0x6c, 0x65, 0x49, 0x52, 0x00]  # "\x7fTileIR\x00"
+
+# Section IDs
+module Section
+    const EndOfBytecode = UInt8(0x00)
+    const String        = UInt8(0x01)
+    const Func          = UInt8(0x02)
+    const Debug         = UInt8(0x03)
+    const Constant      = UInt8(0x04)
+    const Type          = UInt8(0x05)
+    const Global        = UInt8(0x06)
+end
+
+# Debug attribute ID
+struct DebugAttrId
+    id::Int
+end
+
+"""
+    DebugAttrTable
+
+Table of debug attributes (file/line info).
+"""
+mutable struct DebugAttrTable
+    attrs::Dict{Vector{UInt8}, DebugAttrId}
+    string_table::StringTable
+    next_id::Int
+end
+
+DebugAttrTable(string_table::StringTable) = DebugAttrTable(
+    Dict{Vector{UInt8}, DebugAttrId}(),
+    string_table,
+    1  # Start at 1, 0 is reserved for "no debug info"
+)
+
+function Base.getindex(table::DebugAttrTable, encoded::Vector{UInt8})
+    get!(table.attrs, encoded) do
+        id = table.next_id
+        table.next_id += 1
+        DebugAttrId(id)
+    end
+end
+
+Base.length(table::DebugAttrTable) = length(table.attrs)
+
+function items(table::DebugAttrTable)
+    pairs = collect(table.attrs)
+    sort!(pairs, by = p -> p[2].id)
+    return pairs
+end
+
+# SSA Value wrapper
+struct Value
+    id::Int
+end
+
+function encode_operand!(buf::Vector{UInt8}, val::Value)
+    encode_varint!(buf, val.id)
+end
+
+function encode_optional_operand!(buf::Vector{UInt8}, val::Union{Value, Nothing})
+    if val !== nothing
+        encode_varint!(buf, val.id)
+    end
+end
+
+function encode_operands!(buf::Vector{UInt8}, vals::AbstractVector{Value})
+    for v in vals
+        encode_varint!(buf, v.id)
+    end
+end
+
+function encode_sized_operands!(buf::Vector{UInt8}, vals::AbstractVector{Value})
+    encode_varint!(buf, length(vals))
+    encode_operands!(buf, vals)
+end
+
+"""
+    CodeBuilder
+
+Builds bytecode for a single function's body.
+Tracks SSA value numbering and operation count.
+"""
+mutable struct CodeBuilder
+    buf::Vector{UInt8}
+    string_table::StringTable
+    constant_table::ConstantTable
+    type_table::TypeTable
+    debug_attrs::Vector{DebugAttrId}
+    next_value_id::Int
+    cur_debug_attr::DebugAttrId
+    num_ops::Int
+end
+
+function CodeBuilder(string_table::StringTable, constant_table::ConstantTable, type_table::TypeTable)
+    CodeBuilder(
+        UInt8[],
+        string_table,
+        constant_table,
+        type_table,
+        DebugAttrId[],
+        0,
+        DebugAttrId(0),  # No debug info
+        0
+    )
+end
+
+"""
+Create a new SSA value(s) for an operation result.
+"""
+function new_op!(cb::CodeBuilder, num_results::Int=1)
+    push!(cb.debug_attrs, cb.cur_debug_attr)
+    cb.num_ops += 1
+
+    if num_results == 0
+        return nothing
+    elseif num_results == 1
+        val = Value(cb.next_value_id)
+        cb.next_value_id += 1
+        return val
+    else
+        vals = [Value(cb.next_value_id + i) for i in 0:num_results-1]
+        cb.next_value_id += num_results
+        return Tuple(vals)
+    end
+end
+
+"""
+Create block arguments (for function parameters or nested blocks).
+"""
+function make_block_args!(cb::CodeBuilder, count::Int)
+    vals = [Value(cb.next_value_id + i) for i in 0:count-1]
+    cb.next_value_id += count
+    return vals
+end
+
+# Attribute encoders for operations
+function encode_opattr_bool!(cb::CodeBuilder, val::Bool)
+    push!(cb.buf, val ? 0x01 : 0x00)
+end
+
+function encode_opattr_int!(cb::CodeBuilder, val::Integer)
+    encode_varint!(cb.buf, val)
+end
+
+function encode_opattr_str!(cb::CodeBuilder, val::String)
+    sid = cb.string_table[val]
+    encode_varint!(cb.buf, sid.id)
+end
+
+function encode_opattr_typeid!(cb::CodeBuilder, tid::TypeId)
+    encode_typeid!(cb.buf, tid)
+end
+
+function encode_opattr_dense!(cb::CodeBuilder, data::Vector{UInt8})
+    cid = dense_constant!(cb.constant_table, data)
+    encode_varint!(cb.buf, cid.id)
+end
+
+"""
+    BytecodeWriter
+
+Top-level writer for bytecode files.
+"""
+mutable struct BytecodeWriter
+    buf::Vector{UInt8}
+    string_table::StringTable
+    constant_table::ConstantTable
+    type_table::TypeTable
+    debug_attr_table::DebugAttrTable
+    debug_info::Vector{Vector{DebugAttrId}}
+    num_functions::Int
+end
+
+function BytecodeWriter()
+    string_table = StringTable()
+    BytecodeWriter(
+        UInt8[],
+        string_table,
+        ConstantTable(),
+        TypeTable(),
+        DebugAttrTable(string_table),
+        Vector{Vector{DebugAttrId}}[],
+        0
+    )
+end
+
+"""
+Write the bytecode header.
+"""
+function write_header!(buf::Vector{UInt8})
+    append!(buf, MAGIC)
+    major, minor, tag = BYTECODE_VERSION
+    push!(buf, UInt8(major))
+    push!(buf, UInt8(minor))
+    # Tag as 2-byte little-endian
+    push!(buf, UInt8(tag & 0xff))
+    push!(buf, UInt8((tag >> 8) & 0xff))
+end
+
+"""
+Write a section with optional alignment.
+"""
+function write_section!(buf::Vector{UInt8}, section_id::UInt8, content::Vector{UInt8}, alignment::Int=1)
+    has_alignment = alignment > 1
+    push!(buf, section_id | (has_alignment ? 0x80 : 0x00))
+    encode_varint!(buf, length(content))
+    if has_alignment
+        encode_varint!(buf, alignment)
+        pad_to!(buf, alignment)
+    end
+    append!(buf, content)
+end
+
+"""
+Write a table (string, type, or constant table).
+Format: [count] [offsets...] [data...]
+"""
+function write_table!(buf::Vector{UInt8}, table_items, index_size::Int)
+    encode_varint!(buf, length(table_items))
+
+    # Compute offsets
+    pad_to!(buf, index_size)
+    offset = 0
+    for (encoded, _) in table_items
+        for i in 0:index_size-1
+            push!(buf, UInt8((offset >> (8*i)) & 0xff))
+        end
+        offset += length(encoded)
+    end
+
+    # Write data
+    for (encoded, _) in table_items
+        append!(buf, encoded)
+    end
+end
+
+"""
+Write debug info section.
+"""
+function write_debug_section!(buf::Vector{UInt8}, debug_info::Vector{Vector{DebugAttrId}},
+                              debug_attr_table::DebugAttrTable)
+    section_buf = UInt8[]
+
+    # Number of functions with debug info
+    encode_varint!(section_buf, length(debug_info))
+
+    # Function offsets into index array
+    pad_to!(section_buf, 4)
+    index_offset = 0
+    for func_info in debug_info
+        for i in 0:3
+            push!(section_buf, UInt8((index_offset >> (8*i)) & 0xff))
+        end
+        index_offset += length(func_info)
+    end
+
+    # Total number of debug attr indices
+    encode_varint!(section_buf, index_offset)
+
+    # Debug attr IDs per operation (8-byte each)
+    pad_to!(section_buf, 8)
+    for func_info in debug_info
+        for attr in func_info
+            for i in 0:7
+                push!(section_buf, UInt8((attr.id >> (8*i)) & 0xff))
+            end
+        end
+    end
+
+    # Write debug attribute table
+    # Workaround: empty table needs at least one entry
+    if length(debug_attr_table) == 0
+        debug_attr_table[UInt8[0x00]]
+    end
+    write_table!(section_buf, items(debug_attr_table), 4)
+
+    write_section!(buf, Section.Debug, section_buf, 8)
+end
+
+"""
+Write complete bytecode to a buffer.
+Returns the buffer with all sections.
+"""
+function write_bytecode!(f::Function, num_functions::Int)
+    writer = BytecodeWriter()
+
+    # Function section content
+    func_buf = UInt8[]
+    encode_varint!(func_buf, num_functions)
+
+    # Let user build functions
+    f(writer, func_buf)
+
+    @assert writer.num_functions == num_functions "Expected $num_functions functions, got $(writer.num_functions)"
+
+    # Build final output
+    buf = UInt8[]
+    write_header!(buf)
+
+    # Sections in order: Func, Global (if any), Constant, Debug, Type, String, End
+    write_section!(buf, Section.Func, func_buf, 8)
+
+    # Global section (skip if empty)
+
+    # Constant section
+    const_buf = UInt8[]
+    write_table!(const_buf, items(writer.constant_table), 8)
+    write_section!(buf, Section.Constant, const_buf, 8)
+
+    # Debug section
+    write_debug_section!(buf, writer.debug_info, writer.debug_attr_table)
+
+    # Type section
+    type_buf = UInt8[]
+    write_table!(type_buf, items(writer.type_table), 4)
+    write_section!(buf, Section.Type, type_buf, 4)
+
+    # String section
+    str_buf = UInt8[]
+    write_table!(str_buf, items(writer.string_table), 4)
+    write_section!(buf, Section.String, str_buf, 4)
+
+    # End marker
+    push!(buf, Section.EndOfBytecode)
+
+    return buf
+end
+
+"""
+Add a function to the bytecode.
+"""
+function add_function!(writer::BytecodeWriter, func_buf::Vector{UInt8},
+                       name::String,
+                       param_types::Vector{TypeId},
+                       result_types::Vector{TypeId};
+                       is_entry::Bool=false,
+                       entry_hints::Union{Nothing, Vector{UInt8}}=nothing,
+                       func_debug_attr::DebugAttrId=DebugAttrId(0))
+    writer.num_functions += 1
+
+    # Function name
+    name_id = writer.string_table[name]
+    encode_varint!(func_buf, name_id.id)
+
+    # Function signature type
+    sig_type = function_type!(writer.type_table, param_types, result_types)
+    encode_typeid!(func_buf, sig_type)
+
+    # Entry flags
+    flags = 0x00
+    if is_entry
+        flags |= 0x02
+        if entry_hints !== nothing
+            flags |= 0x04
+        end
+    end
+    push!(func_buf, UInt8(flags))
+
+    # Debug info: initialize with function-level debug attr
+    # Operations will append their attrs to this list
+    push!(writer.debug_info, [func_debug_attr])
+    encode_varint!(func_buf, length(writer.debug_info))
+
+    # Entry hints if present
+    if is_entry && entry_hints !== nothing
+        append!(func_buf, entry_hints)
+    end
+
+    # Create code builder for function body
+    cb = CodeBuilder(writer.string_table, writer.constant_table, writer.type_table)
+
+    return cb
+end
+
+"""
+Finalize a function's code and append to func_buf.
+"""
+function finalize_function!(func_buf::Vector{UInt8}, cb::CodeBuilder,
+                            debug_info::Vector{Vector{DebugAttrId}})
+    # Append operation debug attrs to the function's debug info list
+    # (which already contains the function-level debug attr)
+    append!(debug_info[end], cb.debug_attrs)
+
+    # Encode code length and append
+    encode_varint!(func_buf, length(cb.buf))
+    append!(func_buf, cb.buf)
+end

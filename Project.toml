@@ -1,0 +1,4 @@
+name = "cuTile"
+uuid = "0dea8319-8c4a-4662-a73d-20234d115b9a"
+authors = ["Tim Besard <tim.besard@gmail.com>"]
+version = "0.1.0"
