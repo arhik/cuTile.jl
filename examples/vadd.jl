@@ -4,22 +4,22 @@ using CUDA
 import cuTile as ct
 
 # 1D kernel with constant tile size
-# Val{TILE} is a ghost type - filtered from parameters, value becomes constant in IR
-function vec_add_kernel_1d(a::Ptr{T}, b::Ptr{T}, c::Ptr{T}, ::Val{TILE}) where {T, TILE}
+# Constant{Int} is a ghost type - filtered from parameters, value accessed via tile[]
+function vec_add_kernel_1d(a::Ptr{T}, b::Ptr{T}, c::Ptr{T}, tile::ct.Constant{Int}) where {T}
     bid = ct.bid(0)
-    a_tile = ct.load(a, bid, (TILE,))
-    b_tile = ct.load(b, bid, (TILE,))
+    a_tile = ct.load(a, bid, (tile[],))
+    b_tile = ct.load(b, bid, (tile[],))
     ct.store(c, bid, a_tile + b_tile)
     return
 end
 
 # 2D kernel with constant tile sizes
 function vec_add_kernel_2d(a::Ptr{T}, b::Ptr{T}, c::Ptr{T},
-                           ::Val{TILE_X}, ::Val{TILE_Y}) where {T, TILE_X, TILE_Y}
+                           tile_x::ct.Constant{Int}, tile_y::ct.Constant{Int}) where {T}
     bid_x = ct.bid(0)
     bid_y = ct.bid(1)
-    a_tile = ct.load(a, (bid_x, bid_y), (TILE_X, TILE_Y))
-    b_tile = ct.load(b, (bid_x, bid_y), (TILE_X, TILE_Y))
+    a_tile = ct.load(a, (bid_x, bid_y), (tile_x[], tile_y[]))
+    b_tile = ct.load(b, (bid_x, bid_y), (tile_x[], tile_y[]))
     ct.store(c, (bid_x, bid_y), a_tile + b_tile)
     return
 end
@@ -30,13 +30,13 @@ function test_add_1d(::Type{T}, n, tile; name=nothing) where T
     a, b = CUDA.rand(T, n), CUDA.rand(T, n)
 
     # Compile with specific constant tile size
-    argtypes = Tuple{Ptr{T}, Ptr{T}, Ptr{T}, Val{tile}}
+    argtypes = Tuple{Ptr{T}, Ptr{T}, Ptr{T}, ct.Constant{Int, tile}}
     cubin = ct.compile(vec_add_kernel_1d, argtypes; sm_arch="sm_120")
     cumod = CuModule(cubin)
     cufunc = CuFunction(cumod, "vec_add_kernel_1d")
 
     c = CUDA.zeros(T, n)
-    # Note: Val parameters are ghost types - NOT passed at launch time
+    # Note: Constant parameters are ghost types - NOT passed at launch time
     cudacall(cufunc, Tuple{CuPtr{T}, CuPtr{T}, CuPtr{T}}, a, b, c; blocks=cld(n, tile))
 
     @assert Array(c) ≈ Array(a) + Array(b)
@@ -49,13 +49,13 @@ function test_add_2d(::Type{T}, m, n, tile_x, tile_y; name=nothing) where T
     a, b = CUDA.rand(T, m, n), CUDA.rand(T, m, n)
 
     # Compile with specific constant tile sizes
-    argtypes = Tuple{Ptr{T}, Ptr{T}, Ptr{T}, Val{tile_x}, Val{tile_y}}
+    argtypes = Tuple{Ptr{T}, Ptr{T}, Ptr{T}, ct.Constant{Int, tile_x}, ct.Constant{Int, tile_y}}
     cubin = ct.compile(vec_add_kernel_2d, argtypes; sm_arch="sm_120")
     cumod = CuModule(cubin)
     cufunc = CuFunction(cumod, "vec_add_kernel_2d")
 
     c = CUDA.zeros(T, m, n)
-    # Note: Val parameters are ghost types - NOT passed at launch time
+    # Note: Constant parameters are ghost types - NOT passed at launch time
     cudacall(cufunc, Tuple{CuPtr{T}, CuPtr{T}, CuPtr{T}}, a, b, c;
              blocks=(cld(m, tile_x), cld(n, tile_y)))
 

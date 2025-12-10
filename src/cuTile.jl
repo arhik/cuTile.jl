@@ -8,7 +8,7 @@ include("compiler/codegen.jl")
 
 # Public API
 export emit_tileir, compile
-export Tile
+export Tile, Constant
 
 #=============================================================================
  API Types
@@ -33,6 +33,33 @@ struct Tile{T, Shape}
         new{T, Shape}()
     end
 end
+
+"""
+    Constant{T, V}
+
+Compile-time constant with element type `T` and value `V`.
+This is a ghost type (zero-size) - the value is encoded in the type parameter
+and extracted at compile time.
+
+Use `c[]` to access the constant value in kernel code.
+
+# Example
+```julia
+function kernel(a::Ptr{T}, tile::Constant{Int}) where {T}
+    data = ct.load(a, ct.bid(0), (tile[],))  # tile[] extracts the value
+end
+
+# Compile with specific constant value
+argtypes = Tuple{Ptr{Float32}, Constant{Int, 16}}
+```
+"""
+struct Constant{T, V} end
+
+# Convenience constructor that infers type from value
+Constant(val::T) where {T} = Constant{T, val}()
+
+# Extract constant value - @inline ensures this folds to a constant in IR
+@inline Base.getindex(::Constant{T, V}) where {T, V} = V
 
 # Type accessors
 Base.eltype(::Type{Tile{T, Shape}}) where {T, Shape} = T

@@ -4,12 +4,12 @@ using CUDA
 import cuTile as ct
 
 # Transpose kernel with constant tile sizes
-# Val{TM}, Val{TN} are ghost types - filtered from parameters, values become constants in IR
+# Constant{Int} parameters are ghost types - filtered from parameters, values accessed via tm[], tn[]
 function transpose_kernel(x::Ptr{T}, y::Ptr{T},
-                          ::Val{TM}, ::Val{TN}) where {T, TM, TN}
+                          tm::ct.Constant{Int}, tn::ct.Constant{Int}) where {T}
     bidx = ct.bid(0)
     bidy = ct.bid(1)
-    input_tile = ct.load(x, (bidx, bidy), (TM, TN))
+    input_tile = ct.load(x, (bidx, bidy), (tm[], tn[]))
     transposed_tile = ct.transpose(input_tile)
     ct.store(y, (bidy, bidx), transposed_tile)
     return
@@ -21,7 +21,7 @@ function test_transpose(::Type{T}, m, n, tm, tn; name=nothing) where T
     x = CUDA.rand(T, m, n)
 
     # Compile with specific constant tile sizes
-    argtypes = Tuple{Ptr{T}, Ptr{T}, Val{tm}, Val{tn}}
+    argtypes = Tuple{Ptr{T}, Ptr{T}, ct.Constant{Int, tm}, ct.Constant{Int, tn}}
     cubin = ct.compile(transpose_kernel, argtypes; sm_arch="sm_120")
     cumod = CuModule(cubin)
     cufunc = CuFunction(cumod, "transpose_kernel")
@@ -30,7 +30,7 @@ function test_transpose(::Type{T}, m, n, tm, tn; name=nothing) where T
     grid_y = cld(n, tn)
     y = CUDA.zeros(T, n, m)
 
-    # Note: Val parameters are ghost types - NOT passed at launch time
+    # Note: Constant parameters are ghost types - NOT passed at launch time
     cudacall(cufunc, Tuple{CuPtr{T}, CuPtr{T}}, x, y; blocks=(grid_x, grid_y))
 
     @assert Array(y) ≈ transpose(Array(x))
