@@ -625,6 +625,15 @@ function launch(@nospecialize(f), grid, args...;
     # Get grid dimensions
     grid_dims = grid isa Integer ? (grid,) : grid
 
+    # Validate grid dimensions - Tile IR has a 24-bit limit
+    max_grid_dim = (1 << 24) - 1  # 16,777,215
+    for (i, dim) in enumerate(grid_dims)
+        if dim > max_grid_dim
+            error("Grid[$i] exceeds 24-bit limit: max=$max_grid_dim, got=$dim. " *
+                  "Use multiple kernel launches for larger workloads.")
+        end
+    end
+
     # Launch with cached CuFunction
     # Note: threads=1 allows the driver to use the cubin's EIATTR_REQNTID metadata
     # which specifies the actual thread count (typically 128 for Tile kernels)
