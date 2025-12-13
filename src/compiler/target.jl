@@ -257,7 +257,7 @@ function _tile_type_for_julia!(tr::Translation, @nospecialize(T::Type))
 
     # Tile{T, Shape} -> tile type with appropriate dtype and shape
     # Both T and Shape must be fully specified (no UnionAll)
-    if T isa DataType && T.name.name === :Tile
+    if T isa DataType && T <: Tile
         if length(T.parameters) < 2
             error("Tile type must have both element type and shape specified, got: $T. " *
                   "Use Tile{Float32, (16,)} instead of Tile{Float32}.")
@@ -320,7 +320,7 @@ function should_destructure(@nospecialize(T))
     # Must not be a primitive type
     isprimitivetype(T) && return false
     # Check if it's a TileArray
-    T.name.name === :TileArray && return true
+    T <: TileArray && return true
     # For now, only destructure TileArray
     return false
 end

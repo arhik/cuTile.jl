@@ -1047,7 +1047,7 @@ function extract_value_from_quote(@nospecialize(val))
 
     # Check if it's a Constant{T, V} instance - extract V from type parameter
     T = typeof(val)
-    if T isa DataType && T.name.name === :Constant && length(T.parameters) >= 2
+    if T isa DataType && T <: Constant && length(T.parameters) >= 2
         # Constant{Type, Value} - the value is in the second type parameter
         return T.parameters[2]
     end
@@ -1476,7 +1476,7 @@ function extract_tile_shape(@nospecialize(result_type))
     end
 
     # Check if it's a fully specified Tile type
-    if result_type isa DataType && result_type.name.name === :Tile
+    if result_type isa DataType && result_type <: Tile
         if length(result_type.parameters) >= 2
             shape = result_type.parameters[2]
             if shape isa Tuple
@@ -1501,7 +1501,7 @@ function extract_tile_element_type(@nospecialize(result_type))
     end
 
     # Require fully specified Tile type
-    if result_type isa DataType && result_type.name.name === :Tile
+    if result_type isa DataType && result_type <: Tile
         if length(result_type.parameters) < 1
             error("Tile type must have element type specified, got: $result_type")
         end
