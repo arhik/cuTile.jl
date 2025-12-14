@@ -486,6 +486,23 @@ zeros_tile = ct.full((32, 32), 0, Float32)  # 32x32 tile of zeros
     Tile{T, shape}()
 end
 
+"""
+    astype(tile::Tile{T1, Shape}, ::Type{T2}) -> Tile{T2, Shape}
+
+Convert a tile's element type from T1 to T2.
+In kernel code, this is compiled to FToFOp (for float conversions).
+
+# Example
+```julia
+acc = ct.full((64, 64), 0.0f0, Float32)  # Float32 accumulator
+result = ct.astype(acc, Float16)          # Convert to Float16
+```
+"""
+@noinline function astype(tile::Tile{T1, Shape}, ::Type{T2})::Tile{T2, Shape} where {T1, Shape, T2}
+    Base.donotdelete(tile)
+    Tile{T2, Shape}()
+end
+
 #=============================================================================
  Array Dimension Operations
 =============================================================================#

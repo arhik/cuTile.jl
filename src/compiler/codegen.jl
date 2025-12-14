@@ -120,7 +120,7 @@ function emit_block!(ctx::CodegenContext, block::Block)
     code_stmts = code(ctx.target)
     types = ssatypes(ctx.target)
 
-    # Emit statements in this block
+    # Emit statements before nested ops
     for stmt_idx in block.stmts
         stmt = code_stmts[stmt_idx]
         result_type = types[stmt_idx]
@@ -130,6 +130,13 @@ function emit_block!(ctx::CodegenContext, block::Block)
     # Emit nested control flow operations
     for op in block.nested
         emit_control_flow_op!(ctx, op)
+    end
+
+    # Emit statements after nested ops (e.g., after a loop)
+    for stmt_idx in block.post_stmts
+        stmt = code_stmts[stmt_idx]
+        result_type = types[stmt_idx]
+        emit_statement!(ctx, stmt, stmt_idx, result_type)
     end
 
     # Emit terminator
@@ -198,8 +205,10 @@ function emit_control_flow_op!(ctx::CodegenContext, op::ForOp)
     for result_var in op.result_vars
         result_type = ssatypes(ctx.target)[result_var.id]
         type_id = tile_type_for_julia!(ctx, result_type)
+        @debug "ForOp result_var $result_var: type=$result_type, type_id=$type_id"
         push!(result_types, type_id)
     end
+    @debug "ForOp result_types: $result_types ($(length(result_types)) types)"
 
     # Emit ForOp with callback-based region building
     body_builder = function(block_args)
@@ -208,12 +217,21 @@ function emit_control_flow_op!(ctx::CodegenContext, op::ForOp)
             # First block arg is induction variable
             iv_arg = op.body.args[1]
             iv_type = tile_type!(tt, I32(tt), Int[])
-            ctx[iv_arg] = TileValue(block_args[1], iv_type, Int32)
+            iv_tv = TileValue(block_args[1], iv_type, Int32)
+            ctx[iv_arg] = iv_tv
+            # Also map the induction variable phi SSAValue
+            ctx[op.iv_ssa] = iv_tv
 
-            # Remaining are carried values
+            # Remaining are carried values - map both BlockArg and corresponding SSAValue (phi)
             for (i, body_arg) in enumerate(op.body.args[2:end])
-                if i < length(block_args)
-                    ctx[body_arg] = TileValue(block_args[i+1], result_types[i], body_arg.type)
+                if i <= length(block_args) - 1 && i <= length(result_types)
+                    shape = extract_tile_shape(body_arg.type)
+                    tv = TileValue(block_args[i+1], result_types[i], body_arg.type, shape)
+                    ctx[body_arg] = tv
+                    # Also map the phi SSAValue so body statements can reference it
+                    if i <= length(op.result_vars)
+                        ctx[op.result_vars[i]] = tv
+                    end
                 end
             end
         end
@@ -227,7 +245,8 @@ function emit_control_flow_op!(ctx::CodegenContext, op::ForOp)
         if i <= length(results)
             result_type = ssatypes(ctx.target)[result_var.id]
             type_id = tile_type_for_julia!(ctx, result_type)
-            ctx[result_var] = TileValue(results[i], type_id, result_type)
+            shape = extract_tile_shape(result_type)
+            ctx[result_var] = TileValue(results[i], type_id, result_type, shape)
         end
     end
 end
@@ -256,7 +275,8 @@ function emit_control_flow_op!(ctx::CodegenContext, op::LoopOp)
         # Map block arguments (carried values)
         for (i, body_arg) in enumerate(op.body.args)
             if i <= length(block_args) && i <= length(result_types)
-                ctx[body_arg] = TileValue(block_args[i], result_types[i], body_arg.type)
+                shape = extract_tile_shape(body_arg.type)
+                ctx[body_arg] = TileValue(block_args[i], result_types[i], body_arg.type, shape)
             end
         end
 
@@ -269,7 +289,8 @@ function emit_control_flow_op!(ctx::CodegenContext, op::LoopOp)
         if i <= length(results)
             result_type = ssatypes(ctx.target)[result_var.id]
             type_id = tile_type_for_julia!(ctx, result_type)
-            ctx[result_var] = TileValue(results[i], type_id, result_type)
+            shape = extract_tile_shape(result_type)
+            ctx[result_var] = TileValue(results[i], type_id, result_type, shape)
         end
     end
 end
@@ -288,8 +309,10 @@ function emit_terminator!(ctx::CodegenContext, op::YieldOp)
     operands = Value[]
     for val in op.values
         tv = emit_irvalue!(ctx, val)
+        @debug "YieldOp value $val => $(tv !== nothing ? tv : "nothing")"
         tv !== nothing && push!(operands, tv.v)
     end
+    @debug "YieldOp operands: $operands ($(length(operands)) values)"
     encode_YieldOp!(ctx.cb, operands)
 end
 
@@ -579,7 +602,9 @@ Resolve a function reference to its actual value.
 """
 function resolve_function(ctx::CodegenContext, @nospecialize(ref))
     if ref isa GlobalRef
-        return getfield(ref.mod, ref.name)
+        val = getfield(ref.mod, ref.name)
+        # If it's a module, return it for chained lookups
+        return val
     elseif ref isa QuoteNode
         return ref.value
     elseif ref isa SSAValue
@@ -588,6 +613,17 @@ function resolve_function(ctx::CodegenContext, @nospecialize(ref))
             return getfield(stmt.mod, stmt.name)
         elseif stmt isa QuoteNode
             return stmt.value
+        elseif stmt isa Expr && stmt.head === :call
+            # Handle getproperty: Base.getproperty(obj, :name) -> obj.name
+            callee = stmt.args[1]
+            if callee isa GlobalRef && callee.mod === Base && callee.name === :getproperty
+                obj = resolve_function(ctx, stmt.args[2])
+                prop = stmt.args[3]
+                prop_name = prop isa QuoteNode ? prop.value : prop
+                if obj isa Module && prop_name isa Symbol
+                    return getfield(obj, prop_name)
+                end
+            end
         end
     end
     return ref
@@ -664,6 +700,10 @@ end
 
 function emit_intrinsic!(ctx::CodegenContext, ::typeof(floordiv), args, @nospecialize(result_type))
     emit_floordiv!(ctx, args, result_type)
+end
+
+function emit_intrinsic!(ctx::CodegenContext, ::typeof(astype), args, @nospecialize(result_type))
+    emit_astype!(ctx, args, result_type)
 end
 
 #-----------------------------------------------------------------------------
@@ -1037,6 +1077,22 @@ function get_array_spec(@nospecialize(T))
     nothing
 end
 
+"""
+    extract_tile_shape(T) -> Vector{Int}
+
+Extract shape from a Tile{T, Shape} type, returning Int[] if not a Tile type.
+"""
+function extract_tile_shape(@nospecialize(T))
+    T = unwrap_type(T)
+    if T <: Tile && length(T.parameters) >= 2
+        shape = T.parameters[2]
+        if shape isa Tuple
+            return collect(Int, shape)
+        end
+    end
+    Int[]
+end
+
 function extract_index_values(ctx::CodegenContext, args::AbstractVector, idx_pos::Int, ndim::Int)
     index_vals = Value[]
     length(args) < idx_pos && return index_vals
@@ -1205,6 +1261,47 @@ function emit_mma!(ctx::CodegenContext, args::AbstractVector, @nospecialize(resu
     result = encode_MmaFOp!(cb, acc.type_id, lhs.v, rhs.v, acc.v)
 
     TileValue(result, acc.type_id, acc.jltype, acc.shape)
+end
+
+#=============================================================================
+ Type Conversion
+=============================================================================#
+
+function emit_astype!(ctx::CodegenContext, args::AbstractVector, @nospecialize(result_type))
+    cb = ctx.cb
+    tt = ctx.tt
+
+    # Get source tile
+    source = emit_value!(ctx, args[1])
+    source === nothing && error("Cannot resolve source operand for astype()")
+
+    # Get source element type and shape
+    source_type = unwrap_type(source.jltype)
+    source_elem = source_type <: Tile ? source_type.parameters[1] : source_type
+    tile_shape = source.shape
+
+    # Get target element type from the Type argument
+    target_elem = extract_constant(ctx, args[2])
+    target_elem === nothing && error("astype() requires a compile-time constant type")
+    target_elem isa Type || error("astype() second argument must be a Type")
+
+    # Same type? Return source unchanged
+    if source_elem === target_elem
+        return source
+    end
+
+    # Create target type
+    target_dtype = julia_to_tile_dtype!(tt, target_elem)
+    target_tile_type = tile_type!(tt, target_dtype, tile_shape)
+
+    # Emit conversion
+    result = if source_elem <: AbstractFloat && target_elem <: AbstractFloat
+        encode_FToFOp!(cb, target_tile_type, source.v)
+    else
+        error("astype() only supports float-to-float conversion currently (got $source_elem -> $target_elem)")
+    end
+
+    TileValue(result, target_tile_type, Tile{target_elem, Tuple(tile_shape)}, tile_shape)
 end
 
 #=============================================================================

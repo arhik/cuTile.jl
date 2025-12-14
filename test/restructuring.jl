@@ -295,7 +295,7 @@ end
     @test for_op.upper isa Core.Argument  # upper bound is n
     @test !isempty(for_op.body.args)       # [induction_var, acc]
     @test length(for_op.body.args) == 2    # iv + carried value
-    @test for_op.body.terminator isa YieldOp
+    @test for_op.body.terminator isa ContinueOp  # ForOp uses ContinueOp, not YieldOp
     @test length(for_op.result_vars) == 1  # result is the accumulated value
 
     # Display should show "for" syntax
@@ -304,7 +304,7 @@ end
     output = String(take!(io))
     @test occursin("for %arg", output)
     @test occursin("iter_args", output)
-    @test occursin("yield", output)
+    @test occursin("continue", output)  # ForOp uses "continue" terminator
 end
 
 @testset "type preservation" begin

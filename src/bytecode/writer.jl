@@ -161,12 +161,13 @@ function with_region(f::Function, cb::CodeBuilder, arg_type_ids::Vector{TypeId})
         encode_typeid!(cb.buf, tid)
     end
 
-    # Create block arguments
-    block_args = make_block_args!(cb, length(arg_type_ids))
-
-    # Save current buffer and state
+    # Save current state (buffer, num_ops, and next_value_id)
     parent_buf = cb.buf
     parent_num_ops = cb.num_ops
+    parent_next_value_id = cb.next_value_id
+
+    # Create block arguments (allocates value IDs in region scope)
+    block_args = make_block_args!(cb, length(arg_type_ids))
 
     # Create fresh buffer for block body
     cb.buf = UInt8[]
@@ -179,9 +180,10 @@ function with_region(f::Function, cb::CodeBuilder, arg_type_ids::Vector{TypeId})
     block_body = cb.buf
     block_num_ops = cb.num_ops
 
-    # Restore parent state
+    # Restore parent state (including next_value_id - region values are ephemeral)
     cb.buf = parent_buf
     cb.num_ops = parent_num_ops
+    cb.next_value_id = parent_next_value_id
 
     # Encode: num_ops, then block body
     encode_varint!(cb.buf, block_num_ops)

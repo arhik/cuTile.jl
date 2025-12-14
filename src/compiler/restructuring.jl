@@ -1400,7 +1400,7 @@ function structurize_with_loops(code::CodeInfo, blocks::Vector{BlockInfo}, loops
     loop_op = build_loop_op(code, blocks, loop, block_id)
     push!(entry.nested, loop_op)
 
-    # Process blocks after the loop (exit blocks)
+    # Process blocks after the loop (exit blocks) - add to post_stmts
     for exit_bi in sort(collect(loop.exit_blocks))
         block = blocks[exit_bi]
         for si in block.range
@@ -1408,7 +1408,7 @@ function structurize_with_loops(code::CodeInfo, blocks::Vector{BlockInfo}, loops
             if stmt isa ReturnNode
                 entry.terminator = stmt
             elseif !(stmt isa GotoNode || stmt isa GotoIfNot || stmt isa PhiNode)
-                push!(entry.stmts, si)
+                push!(entry.post_stmts, si)
             end
         end
     end
@@ -1651,9 +1651,11 @@ function build_for_op(code::CodeInfo, blocks::Vector{BlockInfo}, loop::LoopInfo,
             end
         end
     end
-    body.terminator = YieldOp(yield_values)
+    # ForOp bodies use ContinueOp (not YieldOp) to continue iteration with updated values
+    body.terminator = ContinueOp(yield_values)
 
-    return ForOp(pattern.lower, pattern.upper, pattern.step, init_values, body, result_vars)
+    iv_ssa = SSAValue(pattern.induction_phi_idx)
+    return ForOp(pattern.lower, pattern.upper, pattern.step, iv_ssa, init_values, body, result_vars)
 end
 
 """

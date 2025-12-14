@@ -101,12 +101,13 @@ Statements are indices into the original CodeInfo.code array.
 mutable struct Block
     id::Int
     args::Vector{BlockArg}           # Block arguments (for loop carried values)
-    stmts::Vector{Int}               # Indices into CodeInfo.code (original SSA positions)
+    stmts::Vector{Int}               # Indices into CodeInfo.code (before nested ops)
     nested::Vector{ControlFlowOp}    # Structured control flow ops within this block
+    post_stmts::Vector{Int}          # Statements after nested ops (e.g., after a loop)
     terminator::Terminator           # ReturnNode, ContinueOp, YieldOp, BreakOp, or nothing
 end
 
-Block(id::Int) = Block(id, BlockArg[], Int[], ControlFlowOp[], nothing)
+Block(id::Int) = Block(id, BlockArg[], Int[], ControlFlowOp[], Int[], nothing)
 
 function Base.show(io::IO, block::Block)
     print(io, "Block(id=", block.id)
@@ -150,6 +151,7 @@ struct ForOp <: ControlFlowOp
     lower::IRValue                   # Lower bound
     upper::IRValue                   # Upper bound (exclusive)
     step::IRValue                    # Step value
+    iv_ssa::SSAValue                 # SSA value for induction variable phi
     init_values::Vector{IRValue}     # Initial values for loop-carried variables
     body::Block                      # Has induction var + carried vars as args
     result_vars::Vector{SSAValue}    # SSA values that receive final results
@@ -157,6 +159,7 @@ end
 
 function Base.show(io::IO, op::ForOp)
     print(io, "ForOp(lower=", op.lower, ", upper=", op.upper, ", step=", op.step,
+          ", iv=", op.iv_ssa,
           ", init=", length(op.init_values),
           ", body=Block(", op.body.id, ")",
           ", results=", length(op.result_vars), ")")
@@ -267,6 +270,9 @@ function each_stmt(f, block::Block)
     end
     for op in block.nested
         each_stmt_in_op(f, op)
+    end
+    for stmt_idx in block.post_stmts
+        f(stmt_idx)
     end
 end
 
@@ -528,6 +534,9 @@ function print_block_body(p::IRPrinter, block::Block)
     end
     for op in block.nested
         push!(items, (:nested, op))
+    end
+    for stmt_idx in block.post_stmts
+        push!(items, (:stmt, stmt_idx))
     end
     if block.terminator !== nothing
         push!(items, (:term, block.terminator))

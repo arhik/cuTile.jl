@@ -635,7 +635,11 @@ Opcode: 109
 """
 function encode_YieldOp!(cb::CodeBuilder, operands::Vector{Value}=Value[])
     encode_varint!(cb.buf, Opcode.YieldOp)
-    encode_sized_operands!(cb.buf, operands)
+    # Variadic result types (empty - yield doesn't produce values, it yields to parent)
+    encode_typeid_seq!(cb.buf, TypeId[])
+    # Operands
+    encode_varint!(cb.buf, length(operands))
+    encode_operands!(cb.buf, operands)
     return new_op!(cb, 0)
 end
 
