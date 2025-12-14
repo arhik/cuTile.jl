@@ -1433,12 +1433,243 @@ function collect_block_stmts!(block::Block, info::BlockInfo, code::CodeInfo)
     end
 end
 
-"""
-    build_loop_op(code::CodeInfo, blocks::Vector{BlockInfo}, loop::LoopInfo, block_id::Ref{Int}) -> LoopOp
+#=============================================================================
+ For-Loop Pattern Detection
+=============================================================================#
 
-Build a LoopOp from loop information.
+"""
+    ForLoopPattern
+
+Detected for-loop pattern with bounds and induction variable info.
+"""
+struct ForLoopPattern
+    lower::IRValue           # Initial value of induction variable
+    upper::IRValue           # Upper bound (exclusive)
+    step::IRValue            # Step value
+    induction_phi_idx::Int   # SSA index of induction variable phi
+end
+
+"""
+    detect_for_loop_pattern(code, blocks, loop) -> Union{ForLoopPattern, Nothing}
+
+Detect if a loop is a simple counted for-loop with pattern:
+- Header has phi for induction var: φ(init, next)
+- Condition is slt_int(iv, upper) or similar
+- Body has iv_next = add_int(iv, step)
+"""
+function detect_for_loop_pattern(code::CodeInfo, blocks::Vector{BlockInfo}, loop::LoopInfo)
+    stmts = code.code
+    header = blocks[loop.header]
+
+    # Find the GotoIfNot condition in header
+    cond_var = nothing
+    for si in header.range
+        stmt = stmts[si]
+        if stmt isa GotoIfNot
+            cond_var = stmt.cond
+            break
+        end
+    end
+    cond_var === nothing && return nothing
+    cond_var isa SSAValue || return nothing
+
+    # Trace to comparison: slt_int(%iv, %upper)
+    cond_stmt = stmts[cond_var.id]
+    cond_stmt isa Expr || return nothing
+    cond_stmt.head === :call || return nothing
+
+    func = cond_stmt.args[1]
+    is_less_than = func isa GlobalRef && func.name in (:slt_int, :ult_int)
+    is_less_than || return nothing
+
+    iv_candidate = cond_stmt.args[2]  # induction variable
+    upper_bound = cond_stmt.args[3]   # upper bound
+
+    # The iv_candidate should be a phi node in the header
+    iv_candidate isa SSAValue || return nothing
+    iv_phi_idx = iv_candidate.id
+    iv_phi_stmt = stmts[iv_phi_idx]
+    iv_phi_stmt isa PhiNode || return nothing
+
+    # Verify the phi is in the header
+    iv_phi_idx in header.range || return nothing
+
+    # Extract lower bound (init value from outside loop)
+    stmt_to_blk = stmt_to_block_map(blocks, length(stmts))
+    lower_bound = nothing
+
+    for (edge_idx, _) in enumerate(iv_phi_stmt.edges)
+        if isassigned(iv_phi_stmt.values, edge_idx)
+            val = iv_phi_stmt.values[edge_idx]
+            val_in_loop = false
+            if val isa SSAValue && val.id > 0 && val.id <= length(stmts)
+                val_in_loop = stmt_to_blk[val.id] ∈ loop.blocks
+            end
+            if !val_in_loop
+                lower_bound = convert_phi_value(val)
+                break
+            end
+        end
+    end
+    lower_bound === nothing && return nothing
+
+    # Find step by looking for add_int(iv_phi, step) in loop body
+    step = nothing
+    for bi in loop.blocks
+        for si in blocks[bi].range
+            stmt = stmts[si]
+            if stmt isa Expr && stmt.head === :call
+                func = stmt.args[1]
+                if func isa GlobalRef && func.name === :add_int
+                    # Check if it's iv + constant
+                    if stmt.args[2] isa SSAValue && stmt.args[2].id == iv_phi_idx
+                        step = convert_phi_value(stmt.args[3])
+                        break
+                    end
+                end
+            end
+        end
+        step !== nothing && break
+    end
+    step === nothing && return nothing
+
+    return ForLoopPattern(lower_bound, convert_phi_value(upper_bound), step, iv_phi_idx)
+end
+
+"""
+    build_for_op(code, blocks, loop, pattern, block_id) -> ForOp
+
+Build a ForOp from detected for-loop pattern.
+"""
+function build_for_op(code::CodeInfo, blocks::Vector{BlockInfo}, loop::LoopInfo,
+                      pattern::ForLoopPattern, block_id::Ref{Int})
+    stmts = code.code
+    header_block = blocks[loop.header]
+    stmt_to_blk = stmt_to_block_map(blocks, length(stmts))
+
+    # Collect block args and init values
+    # First arg is induction variable, rest are carried values
+    block_args = BlockArg[]
+    init_values = IRValue[]
+    result_vars = SSAValue[]
+    carried_phi_indices = Int[]
+
+    # Induction variable is first block arg
+    iv_type = code.ssavaluetypes[pattern.induction_phi_idx]
+    push!(block_args, BlockArg(1, iv_type))
+
+    # Other phis become carried values
+    for si in header_block.range
+        stmt = stmts[si]
+        if stmt isa PhiNode && si != pattern.induction_phi_idx
+            push!(result_vars, SSAValue(si))
+            push!(carried_phi_indices, si)
+            phi_type = code.ssavaluetypes[si]
+            push!(block_args, BlockArg(length(block_args) + 1, phi_type))
+
+            # Extract init value (from outside loop)
+            for (edge_idx, _) in enumerate(stmt.edges)
+                if isassigned(stmt.values, edge_idx)
+                    val = stmt.values[edge_idx]
+                    val_in_loop = false
+                    if val isa SSAValue && val.id > 0 && val.id <= length(stmts)
+                        val_in_loop = stmt_to_blk[val.id] ∈ loop.blocks
+                    end
+                    if !val_in_loop
+                        push!(init_values, convert_phi_value(val))
+                        break
+                    end
+                end
+            end
+        end
+    end
+
+    # Build body block
+    body = Block(block_id[])
+    block_id[] += 1
+    body.args = block_args
+
+    # Find the induction increment statement to exclude
+    iv_incr_idx = nothing
+    for bi in loop.blocks
+        for si in blocks[bi].range
+            stmt = stmts[si]
+            if stmt isa Expr && stmt.head === :call
+                func = stmt.args[1]
+                if func isa GlobalRef && func.name === :add_int
+                    if stmt.args[2] isa SSAValue && stmt.args[2].id == pattern.induction_phi_idx
+                        iv_incr_idx = si
+                        break
+                    end
+                end
+            end
+        end
+        iv_incr_idx !== nothing && break
+    end
+
+    # Collect body statements from all loop blocks, excluding:
+    # - phi nodes
+    # - control flow (goto, gotoifnot)
+    # - the induction increment
+    # - the condition comparison
+    for bi in sort(collect(loop.blocks))
+        block = blocks[bi]
+        for si in block.range
+            stmt = stmts[si]
+            if stmt isa PhiNode || stmt isa GotoNode || stmt isa GotoIfNot || stmt isa ReturnNode
+                continue
+            end
+            if si == iv_incr_idx
+                continue
+            end
+            # Also skip the condition comparison
+            if stmt isa Expr && stmt.head === :call
+                func = stmt.args[1]
+                if func isa GlobalRef && func.name in (:slt_int, :ult_int)
+                    continue
+                end
+            end
+            push!(body.stmts, si)
+        end
+    end
+
+    # Find yield values (carried values from inside loop)
+    yield_values = IRValue[]
+    for phi_idx in carried_phi_indices
+        phi = stmts[phi_idx]
+        for (edge_idx, _) in enumerate(phi.edges)
+            if isassigned(phi.values, edge_idx)
+                val = phi.values[edge_idx]
+                val_in_loop = false
+                if val isa SSAValue && val.id > 0 && val.id <= length(stmts)
+                    val_in_loop = stmt_to_blk[val.id] ∈ loop.blocks
+                end
+                if val_in_loop
+                    push!(yield_values, convert_phi_value(val))
+                    break
+                end
+            end
+        end
+    end
+    body.terminator = YieldOp(yield_values)
+
+    return ForOp(pattern.lower, pattern.upper, pattern.step, init_values, body, result_vars)
+end
+
+"""
+    build_loop_op(code::CodeInfo, blocks::Vector{BlockInfo}, loop::LoopInfo, block_id::Ref{Int}) -> Union{ForOp, LoopOp}
+
+Build a ForOp or LoopOp from loop information.
+Tries to detect for-loop pattern first, falls back to LoopOp.
 """
 function build_loop_op(code::CodeInfo, blocks::Vector{BlockInfo}, loop::LoopInfo, block_id::Ref{Int})
+    # Try to detect for-loop pattern first
+    pattern = detect_for_loop_pattern(code, blocks, loop)
+    if pattern !== nothing
+        return build_for_op(code, blocks, loop, pattern, block_id)
+    end
+
+    # Fall back to LoopOp
     stmts = code.code
     header_block = blocks[loop.header]
 
@@ -1569,12 +1800,16 @@ function convert_phi_value(val)
         return val
     elseif val isa Argument
         return val
-    elseif val isa Int
-        return SSAValue(0)  # Indicates literal
+    elseif val isa Integer
+        return Literal(val)
     elseif val isa QuoteNode
-        return SSAValue(0)
+        inner = val.value
+        if inner isa Integer
+            return Literal(inner)
+        end
+        return Literal(inner)
     else
-        return SSAValue(0)
+        return Literal(0)  # Fallback
     end
 end
 

@@ -326,6 +326,7 @@ emit_irvalue!(ctx::CodegenContext, ssa::SSAValue) = ctx[ssa]
 emit_irvalue!(ctx::CodegenContext, arg::Argument) = ctx[arg]
 emit_irvalue!(ctx::CodegenContext, slot::SlotNumber) = ctx[slot]
 emit_irvalue!(ctx::CodegenContext, block_arg::BlockArg) = ctx[block_arg]
+emit_irvalue!(ctx::CodegenContext, lit::Literal) = emit_value!(ctx, lit.value)
 
 #=============================================================================
  Statement Emission
