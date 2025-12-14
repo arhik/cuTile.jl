@@ -238,27 +238,32 @@ function each_stmt_in_op(f, op::LoopOp)
 end
 
 #=============================================================================
- Pretty Printing (MLIR SCF-style)
+ Pretty Printing (Julia CodeInfo-style)
 =============================================================================#
 
 """
     IRPrinter
 
 Context for printing structured IR with proper indentation and value formatting.
+Uses Julia's CodeInfo style with box-drawing characters.
 """
-struct IRPrinter
+mutable struct IRPrinter
     io::IO
     code::CodeInfo
     indent::Int
+    line_prefix::String    # Prefix for continuation lines (│, spaces)
+    is_last_stmt::Bool     # Whether current stmt is last in block
 end
 
-IRPrinter(io::IO, code::CodeInfo) = IRPrinter(io, code, 0)
-indent(p::IRPrinter, n::Int=1) = IRPrinter(p.io, p.code, p.indent + n)
+IRPrinter(io::IO, code::CodeInfo) = IRPrinter(io, code, 0, "", false)
+
+function indent(p::IRPrinter, n::Int=1)
+    new_prefix = p.line_prefix * "    "  # 4 spaces per indent level
+    return IRPrinter(p.io, p.code, p.indent + n, new_prefix, false)
+end
 
 function print_indent(p::IRPrinter)
-    for _ in 1:p.indent
-        print(p.io, "  ")
-    end
+    print(p.io, p.line_prefix)
 end
 
 # Format an IR value for printing
@@ -308,25 +313,26 @@ function format_results(p::IRPrinter, results::Vector{SSAValue})
     elseif length(results) == 1
         r = results[1]
         typ = p.code.ssavaluetypes[r.id]
-        string(format_value(p, r), " : ", format_type(typ))
+        string(format_value(p, r), "::", format_type(typ))
     else
-        parts = [string(format_value(p, r), " : ", format_type(p.code.ssavaluetypes[r.id]))
+        parts = [string(format_value(p, r), "::", format_type(p.code.ssavaluetypes[r.id]))
                  for r in results]
         string("(", join(parts, ", "), ")")
     end
 end
 
 # Print a statement from the original CodeInfo
-function print_stmt(p::IRPrinter, stmt_idx::Int)
+function print_stmt(p::IRPrinter, stmt_idx::Int; prefix::String="│  ")
     stmt = p.code.code[stmt_idx]
     ssatype = p.code.ssavaluetypes[stmt_idx]
 
     print_indent(p)
+    print(p.io, prefix)
 
-    # Print as: %N = <expr> : Type
+    # Print as: %N = <expr>::Type (Julia style)
     print(p.io, "%", stmt_idx, " = ")
     print_expr(p, stmt)
-    println(p.io, " : ", format_type(ssatype))
+    println(p.io, "::", format_type(ssatype))
 end
 
 # Print an expression (RHS of a statement)
@@ -419,8 +425,9 @@ function print_iter_args(p::IRPrinter, args::Vector{BlockArg}, init_values::Vect
 end
 
 # Print a terminator
-function print_terminator(p::IRPrinter, term::ReturnNode)
+function print_terminator(p::IRPrinter, term::ReturnNode; prefix::String="└──")
     print_indent(p)
+    print(p.io, prefix, " ")
     if isdefined(term, :val)
         println(p.io, "return ", format_value(p, term.val))
     else
@@ -428,91 +435,116 @@ function print_terminator(p::IRPrinter, term::ReturnNode)
     end
 end
 
-function print_terminator(p::IRPrinter, term::YieldOp)
+function print_terminator(p::IRPrinter, term::YieldOp; prefix::String="└──")
     print_indent(p)
+    print(p.io, prefix, " ")
     if isempty(term.values)
-        println(p.io, "scf.yield")
+        println(p.io, "yield")
     else
-        println(p.io, "scf.yield ", join([format_value(p, v) for v in term.values], ", "))
+        println(p.io, "yield ", join([format_value(p, v) for v in term.values], ", "))
     end
 end
 
-function print_terminator(p::IRPrinter, term::ContinueOp)
+function print_terminator(p::IRPrinter, term::ContinueOp; prefix::String="└──")
     print_indent(p)
+    print(p.io, prefix, " ")
     if isempty(term.values)
-        println(p.io, "scf.continue")
+        println(p.io, "continue")
     else
-        println(p.io, "scf.continue ", join([format_value(p, v) for v in term.values], ", "))
+        println(p.io, "continue ", join([format_value(p, v) for v in term.values], ", "))
     end
 end
 
-function print_terminator(p::IRPrinter, term::BreakOp)
+function print_terminator(p::IRPrinter, term::BreakOp; prefix::String="└──")
     print_indent(p)
+    print(p.io, prefix, " ")
     if isempty(term.values)
-        println(p.io, "scf.break")
+        println(p.io, "break")
     else
-        println(p.io, "scf.break ", join([format_value(p, v) for v in term.values], ", "))
+        println(p.io, "break ", join([format_value(p, v) for v in term.values], ", "))
     end
 end
 
-function print_terminator(p::IRPrinter, ::Nothing)
+function print_terminator(p::IRPrinter, ::Nothing; prefix::String="└──")
     # No terminator
 end
 
 # Print a block's contents (statements, nested ops, terminator)
 function print_block_body(p::IRPrinter, block::Block)
-    # Print statements
+    # Collect all items to print to determine which is last
+    items = []
+
     for stmt_idx in block.stmts
-        print_stmt(p, stmt_idx)
+        push!(items, (:stmt, stmt_idx))
     end
-
-    # Print nested control flow
     for op in block.nested
-        print_control_flow(p, op)
+        push!(items, (:nested, op))
+    end
+    if block.terminator !== nothing
+        push!(items, (:term, block.terminator))
     end
 
-    # Print terminator
-    print_terminator(p, block.terminator)
+    for (i, item) in enumerate(items)
+        is_last = (i == length(items))
+        if item[1] == :stmt
+            prefix = is_last ? "└──" : "│  "
+            print_stmt(p, item[2]; prefix=prefix)
+        elseif item[1] == :nested
+            print_control_flow(p, item[2]; is_last=is_last)
+        else  # :term
+            print_terminator(p, item[2]; prefix="└──")
+        end
+    end
 end
 
-# Print IfOp (MLIR SCF style)
-function print_control_flow(p::IRPrinter, op::IfOp)
+# Print IfOp (Julia-style)
+function print_control_flow(p::IRPrinter, op::IfOp; is_last::Bool=false)
+    prefix = is_last ? "└──" : "├──"
+    cont_prefix = is_last ? "    " : "│   "
+
     print_indent(p)
 
     # Print results assignment if any
     if !isempty(op.result_vars)
-        print(p.io, format_results(p, op.result_vars), " = ")
+        print(p.io, prefix, " ", format_results(p, op.result_vars), " = ")
+        print(p.io, "if ", format_value(p, op.condition))
+    else
+        print(p.io, prefix, " if ", format_value(p, op.condition))
     end
+    println(p.io)
 
-    # scf.if %cond {
-    println(p.io, "scf.if ", format_value(p, op.condition), " {")
+    # Then block body (indented with continuation line)
+    then_p = IRPrinter(p.io, p.code, p.indent + 1, p.line_prefix * cont_prefix, false)
+    print_block_body(then_p, op.then_block)
 
-    # Then block body
-    print_block_body(indent(p), op.then_block)
-
-    # } else {
+    # else - aligned with "if"
     print_indent(p)
-    println(p.io, "} else {")
+    println(p.io, cont_prefix, "else")
 
     # Else block body
-    print_block_body(indent(p), op.else_block)
+    print_block_body(then_p, op.else_block)
 
-    # }
+    # end - aligned with "if"
     print_indent(p)
-    println(p.io, "}")
+    println(p.io, cont_prefix, "end")
 end
 
-# Print ForOp (MLIR SCF style)
-function print_control_flow(p::IRPrinter, op::ForOp)
+# Print ForOp (Julia-style)
+function print_control_flow(p::IRPrinter, op::ForOp; is_last::Bool=false)
+    prefix = is_last ? "└──" : "├──"
+    cont_prefix = is_last ? "    " : "│   "
+
     print_indent(p)
 
     # Print results assignment if any
     if !isempty(op.result_vars)
-        print(p.io, format_results(p, op.result_vars), " = ")
+        print(p.io, prefix, " ", format_results(p, op.result_vars), " = ")
+    else
+        print(p.io, prefix, " ")
     end
 
-    # scf.for %iv = %lb to %ub step %step iter_args(...) {
-    print(p.io, "scf.for ")
+    # for %iv = %lb:%step:%ub
+    print(p.io, "for ")
 
     # Induction variable (first block arg if present)
     if !isempty(op.body.args)
@@ -520,8 +552,8 @@ function print_control_flow(p::IRPrinter, op::ForOp)
         print(p.io, "%arg", iv.id, " = ")
     end
 
-    print(p.io, format_value(p, op.lower), " to ", format_value(p, op.upper),
-          " step ", format_value(p, op.step))
+    print(p.io, format_value(p, op.lower), ":", format_value(p, op.step), ":",
+          format_value(p, op.upper))
 
     # Print iteration arguments (remaining block args after induction var)
     if length(op.body.args) > 1
@@ -529,55 +561,66 @@ function print_control_flow(p::IRPrinter, op::ForOp)
         print_iter_args(p, carried_args, op.init_values)
     end
 
-    println(p.io, " {")
+    println(p.io)
 
     # Body
-    print_block_body(indent(p), op.body)
+    body_p = IRPrinter(p.io, p.code, p.indent + 1, p.line_prefix * cont_prefix, false)
+    print_block_body(body_p, op.body)
 
     print_indent(p)
-    println(p.io, "}")
+    println(p.io, cont_prefix, "end")
 end
 
-# Print LoopOp (MLIR SCF while style)
-function print_control_flow(p::IRPrinter, op::LoopOp)
+# Print LoopOp (Julia-style while)
+function print_control_flow(p::IRPrinter, op::LoopOp; is_last::Bool=false)
+    prefix = is_last ? "└──" : "├──"
+    cont_prefix = is_last ? "    " : "│   "
+
     print_indent(p)
 
     # Print results assignment if any
     if !isempty(op.result_vars)
-        print(p.io, format_results(p, op.result_vars), " = ")
+        print(p.io, prefix, " ", format_results(p, op.result_vars), " = ")
+        print(p.io, "while")
+    else
+        print(p.io, prefix, " while")
     end
-
-    # scf.while iter_args(...) {
-    print(p.io, "scf.while")
     print_iter_args(p, op.body.args, op.init_values)
-    println(p.io, " {")
+    println(p.io)
 
     # Body
-    print_block_body(indent(p), op.body)
+    body_p = IRPrinter(p.io, p.code, p.indent + 1, p.line_prefix * cont_prefix, false)
+    print_block_body(body_p, op.body)
 
     print_indent(p)
-    println(p.io, "}")
+    println(p.io, cont_prefix, "end")
 end
 
 # Main entry point: show for StructuredCodeInfo
 function Base.show(io::IO, ::MIME"text/plain", sci::StructuredCodeInfo)
-    # Print header
-    println(io, "StructuredCodeInfo {")
-
-    p = IRPrinter(io, sci.code, 1)
-
-    # Print block arguments for entry (function parameters)
-    if !isempty(sci.entry.args)
-        print_indent(p)
-        print(io, "^entry")
-        print_block_args(p, sci.entry.args)
-        println(io, ":")
+    # Get return type from last stmt if it's a return
+    ret_type = "Any"
+    for stmt in reverse(sci.code.code)
+        if stmt isa ReturnNode && isdefined(stmt, :val)
+            val = stmt.val
+            if val isa SSAValue
+                ret_type = format_type(sci.code.ssavaluetypes[val.id])
+            else
+                ret_type = format_type(typeof(val))
+            end
+            break
+        end
     end
+
+    # Print header like CodeInfo
+    println(io, "StructuredCodeInfo(")
+
+    p = IRPrinter(io, sci.code, 0, "", false)
 
     # Print entry block body
     print_block_body(p, sci.entry)
 
-    println(io, "}")
+    println(io, ") => ", ret_type)
 end
 
 # Keep the simple show method for compact display

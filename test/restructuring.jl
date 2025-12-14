@@ -132,11 +132,11 @@ end
     @test if_op.then_block.terminator isa Core.ReturnNode
     @test if_op.else_block.terminator isa Core.ReturnNode
 
-    # Display should show scf.if structure
+    # Display should show if structure
     io = IOBuffer()
     show(io, MIME"text/plain"(), sci)
     output = String(take!(io))
-    @test occursin("scf.if", output)
+    @test occursin("if %", output)  # Julia-style if
     @test occursin("return", output)
 end
 
@@ -172,7 +172,7 @@ end
     output = String(take!(io))
 
     @test occursin("StructuredCodeInfo", output)
-    @test occursin("scf.if", output)  # Should show structured if
+    @test occursin("if %", output)  # Julia-style if
     @test occursin("return", output)  # Both branches have returns
 end
 
