@@ -99,6 +99,47 @@ end
     @test sci isa StructuredCodeInfo
 end
 
+@testset "terminating if-then-else" begin
+    # Simple ternary with Bool condition - both branches return
+    f(x) = x ? 1 : 2
+    sci = code_structured(f, Tuple{Bool})
+    @test sci isa StructuredCodeInfo
+    @test has_nested_op(sci.entry, IfOp)
+
+    # Verify the IfOp structure
+    if_ops = find_all_ops(sci, IfOp)
+    @test length(if_ops) == 1
+    if_op = if_ops[1]
+    @test if_op.then_block.terminator isa Core.ReturnNode
+    @test if_op.else_block.terminator isa Core.ReturnNode
+
+    # Ternary with computed condition - stmt before if, both branches compute + return
+    g(x) = x > 0 ? x + 1 : x - 1
+    sci = code_structured(g, Tuple{Int})
+    @test sci isa StructuredCodeInfo
+    @test has_nested_op(sci.entry, IfOp)
+
+    # Should have condition computation before the IfOp
+    @test !isempty(sci.entry.stmts)
+
+    # Verify IfOp with computations in branches
+    if_ops = find_all_ops(sci, IfOp)
+    @test length(if_ops) == 1
+    if_op = if_ops[1]
+    # Each branch should have a computation statement and a return
+    @test !isempty(if_op.then_block.stmts)
+    @test !isempty(if_op.else_block.stmts)
+    @test if_op.then_block.terminator isa Core.ReturnNode
+    @test if_op.else_block.terminator isa Core.ReturnNode
+
+    # Display should show scf.if structure
+    io = IOBuffer()
+    show(io, MIME"text/plain"(), sci)
+    output = String(take!(io))
+    @test occursin("scf.if", output)
+    @test occursin("return", output)
+end
+
 @testset "display output" begin
     # Test straight-line display
     f(x) = x + 1
@@ -122,7 +163,7 @@ end
 end
 
 @testset "display with control flow" begin
-    # Even if not fully restructured, display should work
+    # Terminating if-then-else should be properly restructured
     f(x) = x > 0 ? x + 1 : x - 1
     sci = code_structured(f, Tuple{Int})
 
@@ -131,8 +172,8 @@ end
     output = String(take!(io))
 
     @test occursin("StructuredCodeInfo", output)
-    # Should show either scf.if (if restructured) or statements (if flat)
-    @test occursin("%", output)
+    @test occursin("scf.if", output)  # Should show structured if
+    @test occursin("return", output)  # Both branches have returns
 end
 
 # Note: Loop restructuring requires complex analysis and may fall back to flat.

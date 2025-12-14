@@ -16,6 +16,7 @@ Single-entry control-flow structure classified according to well-specified patte
     REGION_BLOCK           # Sequence of blocks
     REGION_IF_THEN         # Conditional with one branch
     REGION_IF_THEN_ELSE    # Conditional with two branches merging
+    REGION_IF_THEN_ELSE_TERMINATING  # Conditional with both branches returning
     REGION_SWITCH          # Multi-way branch
     REGION_TERMINATION     # Block ending with function termination
     REGION_PROPER          # Acyclic region not matching other patterns
@@ -366,6 +367,87 @@ function detect_if_then_else(cfg, v, consumed)
 end
 
 """
+    detect_if_then_else_terminating(cfg, v, code, consumed)
+
+Detect if-then-else pattern where both branches terminate (e.g., return statements).
+Handles both single-statement returns and multi-statement branches ending in returns.
+Returns (condition_block, then_stmts, else_stmts) or nothing,
+where then_stmts/else_stmts are vectors of statement indices in the branch.
+"""
+function detect_if_then_else_terminating(cfg, v, code, consumed)
+    outs = outneighbors(cfg, v)
+    length(outs) == 2 || return nothing
+
+    a, b = outs
+
+    # Neither branch start can be consumed
+    a in consumed && return nothing
+    b in consumed && return nothing
+
+    # Both branches must have exactly one in-edge (from v)
+    length(inneighbors(cfg, a)) == 1 || return nothing
+    length(inneighbors(cfg, b)) == 1 || return nothing
+    only(inneighbors(cfg, a)) == v || return nothing
+    only(inneighbors(cfg, b)) == v || return nothing
+
+    # Follow fallthrough chains to find terminating returns
+    then_chain = follow_to_terminating_return(cfg, a, code, consumed)
+    else_chain = follow_to_terminating_return(cfg, b, code, consumed)
+
+    # Both branches must terminate with returns
+    then_chain === nothing && return nothing
+    else_chain === nothing && return nothing
+
+    # Make sure chains don't overlap
+    then_set = Set(then_chain)
+    for stmt in else_chain
+        stmt in then_set && return nothing
+    end
+
+    return (v, then_chain, else_chain)
+end
+
+"""
+    follow_to_terminating_return(cfg, start, code, consumed) -> Vector{Int} or nothing
+
+Follow a single-successor chain from `start` until reaching a return statement.
+Returns the list of statement indices in the chain, or nothing if the chain
+branches, loops back, or doesn't end in a return.
+"""
+function follow_to_terminating_return(cfg, start::Int, code::CodeInfo, consumed::Set{Int})
+    chain = Int[]
+    current = start
+
+    while true
+        # Don't follow through consumed statements (except start)
+        if current != start && current in consumed
+            return nothing
+        end
+
+        push!(chain, current)
+
+        # Check if this is a return
+        if 1 <= current <= length(code.code) && code.code[current] isa ReturnNode
+            return chain
+        end
+
+        # Must have exactly one outgoing edge to continue
+        successors = outneighbors(cfg, current)
+        length(successors) == 1 || return nothing
+
+        next = only(successors)
+
+        # Next must have exactly one incoming edge (from current)
+        length(inneighbors(cfg, next)) == 1 || return nothing
+
+        # Avoid cycles
+        next in chain && return nothing
+
+        current = next
+    end
+end
+
+"""
     detect_while_loop(cfg, v, back_edges, consumed)
 
 Detect while loop pattern at v.
@@ -448,7 +530,7 @@ function build_control_tree(cfg::SimpleDiGraph, code::CodeInfo; max_iterations::
         v in visited && continue
 
         # Try to match region patterns
-        region = try_match_region(cfg, v, trees, back_edges, visited, consumed)
+        region = try_match_region(cfg, v, trees, back_edges, visited, consumed, code)
 
         if region !== nothing
             (region_type, included_verts) = region
@@ -490,22 +572,35 @@ function build_control_tree(cfg::SimpleDiGraph, code::CodeInfo; max_iterations::
         end
     end
 
-    # Return the tree rooted at vertex 1, or construct one if needed
-    if haskey(trees, 1)
-        return trees[1]
+    # Combine remaining trees into a sequence if needed
+    # This handles cases like: stmt1 -> if-then-else where stmt1 is separate
+    remaining_roots = sort(collect(keys(trees)))
+
+    if length(remaining_roots) == 1
+        return trees[only(remaining_roots)]
+    elseif length(remaining_roots) > 1
+        # Create a sequence containing all remaining trees
+        # Use the first vertex as the root with REGION_BLOCK type
+        root_v = remaining_roots[1]
+        root_tree = ControlTree(root_v, REGION_BLOCK)
+        root_tree.children = [trees[v] for v in remaining_roots]
+        for child in root_tree.children
+            child.parent = root_tree
+        end
+        return root_tree
     else
-        # Fallback: return first available tree
-        return first(values(trees))
+        # No trees at all - create empty block
+        return ControlTree(0, REGION_BLOCK)
     end
 end
 
 """
-    try_match_region(cfg, v, trees, back_edges, visited, consumed)
+    try_match_region(cfg, v, trees, back_edges, visited, consumed, code)
 
 Try to match a region pattern at vertex v.
 Returns (RegionType, included_vertices) or nothing.
 """
-function try_match_region(cfg, v, trees, back_edges, visited, consumed)
+function try_match_region(cfg, v, trees, back_edges, visited, consumed, code)
     # Try acyclic patterns first
     result = detect_block_region(cfg, v, visited, consumed)
     if result !== nothing
@@ -516,6 +611,15 @@ function try_match_region(cfg, v, trees, back_edges, visited, consumed)
     if result !== nothing
         (_, then_v, else_v, _) = result
         return (REGION_IF_THEN_ELSE, [v, then_v, else_v])
+    end
+
+    # Try terminating if-then-else (both branches return)
+    result = detect_if_then_else_terminating(cfg, v, code, consumed)
+    if result !== nothing
+        (_, then_chain, else_chain) = result
+        # Include condition vertex and all statements in both chains
+        all_verts = [v; then_chain; else_chain]
+        return (REGION_IF_THEN_ELSE_TERMINATING, all_verts)
     end
 
     result = detect_if_then(cfg, v, consumed)
@@ -567,10 +671,13 @@ function tree_to_block(tree::ControlTree, code::CodeInfo, block_id::Ref{Int})
 
     if rtype == REGION_BLOCK
         # Collect all statement indices from this block and its children
-        collect_statements!(block, tree, code)
+        collect_statements!(block, tree, code, block_id)
     elseif rtype == REGION_IF_THEN_ELSE
         # First child is condition block, then then_block, else_block
         handle_if_then_else!(block, tree, code, block_id)
+    elseif rtype == REGION_IF_THEN_ELSE_TERMINATING
+        # Both branches terminate (return) - no merge point
+        handle_if_then_else_terminating!(block, tree, code, block_id)
     elseif rtype == REGION_IF_THEN
         # Condition block followed by then_block
         handle_if_then!(block, tree, code, block_id)
@@ -580,7 +687,7 @@ function tree_to_block(tree::ControlTree, code::CodeInfo, block_id::Ref{Int})
         handle_self_loop!(block, tree, code, block_id)
     else
         # For unsupported regions, collect statements sequentially
-        collect_statements!(block, tree, code)
+        collect_statements!(block, tree, code, block_id)
     end
 
     # Set terminator based on last statement
@@ -590,17 +697,26 @@ function tree_to_block(tree::ControlTree, code::CodeInfo, block_id::Ref{Int})
 end
 
 """
-    collect_statements!(block::Block, tree::ControlTree, code::CodeInfo)
+    collect_statements!(block::Block, tree::ControlTree, code::CodeInfo, block_id::Ref{Int})
 
 Collect statement indices from a control tree into a block.
+For REGION_BLOCK children, collects statements; for other region types, creates nested ops.
 """
-function collect_statements!(block::Block, tree::ControlTree, code::CodeInfo)
+function collect_statements!(block::Block, tree::ControlTree, code::CodeInfo, block_id::Ref{Int})
     idx = node_index(tree)
+    rtype = region_type(tree)
 
-    if region_type(tree) == REGION_BLOCK && !isempty(tree.children)
+    if rtype == REGION_BLOCK && !isempty(tree.children)
         # REGION_BLOCK with children: process children in order
         for child in tree.children
-            collect_statements!(block, child, code)
+            child_rtype = region_type(child)
+            if child_rtype == REGION_BLOCK
+                # Recursively collect statements from block children
+                collect_statements!(block, child, code, block_id)
+            else
+                # Other region types need to be converted to nested ops
+                handle_nested_region!(block, child, code, block_id)
+            end
         end
     else
         # Leaf node or single statement
@@ -614,6 +730,30 @@ function collect_statements!(block::Block, tree::ControlTree, code::CodeInfo)
                 block.terminator = stmt
             end
         end
+    end
+end
+
+"""
+    handle_nested_region!(block::Block, tree::ControlTree, code::CodeInfo, block_id::Ref{Int})
+
+Handle a nested control flow region by creating the appropriate op and adding to block.nested.
+"""
+function handle_nested_region!(block::Block, tree::ControlTree, code::CodeInfo, block_id::Ref{Int})
+    rtype = region_type(tree)
+
+    if rtype == REGION_IF_THEN_ELSE
+        handle_if_then_else!(block, tree, code, block_id)
+    elseif rtype == REGION_IF_THEN_ELSE_TERMINATING
+        handle_if_then_else_terminating!(block, tree, code, block_id)
+    elseif rtype == REGION_IF_THEN
+        handle_if_then!(block, tree, code, block_id)
+    elseif rtype == REGION_WHILE_LOOP || rtype == REGION_NATURAL_LOOP
+        handle_loop!(block, tree, code, block_id)
+    elseif rtype == REGION_SELF_LOOP
+        handle_self_loop!(block, tree, code, block_id)
+    else
+        # For unsupported nested regions, just collect statements
+        collect_statements!(block, tree, code, block_id)
     end
 end
 
@@ -650,6 +790,80 @@ function handle_if_then_else!(block::Block, tree::ControlTree, code::CodeInfo, b
     # Create IfOp
     if_op = IfOp(cond_value, then_block, else_block, SSAValue[])
     push!(block.nested, if_op)
+end
+
+"""
+    handle_if_then_else_terminating!(block::Block, tree::ControlTree, code::CodeInfo, block_id::Ref{Int})
+
+Handle if-then-else region where both branches terminate (return).
+Reconstructs the branch structure from the GotoIfNot at the condition vertex.
+"""
+function handle_if_then_else_terminating!(block::Block, tree::ControlTree, code::CodeInfo, block_id::Ref{Int})
+    cond_idx = node_index(tree)
+
+    # Find the GotoIfNot to get condition and branch targets
+    gotoifnot_idx = cond_idx
+    for i in cond_idx:length(code.code)
+        if code.code[i] isa GotoIfNot
+            gotoifnot_idx = i
+            break
+        end
+    end
+
+    gotoifnot = code.code[gotoifnot_idx]
+    @assert gotoifnot isa GotoIfNot "Expected GotoIfNot at condition"
+
+    # Get condition value
+    cond_value = find_condition_value(cond_idx, code)
+
+    # Collect any statements before the GotoIfNot in the condition block
+    for i in cond_idx:gotoifnot_idx-1
+        stmt = code.code[i]
+        if !(stmt isa GotoNode || stmt isa GotoIfNot || stmt isa ReturnNode)
+            push!(block.stmts, i)
+        end
+    end
+
+    # The GotoIfNot branches: false -> dest, true -> fallthrough (next stmt)
+    else_start = gotoifnot.dest
+    then_start = gotoifnot_idx + 1
+
+    # Build then block - follow statements until return
+    then_blk = Block(block_id[])
+    block_id[] += 1
+    collect_branch_statements!(then_blk, then_start, code)
+
+    # Build else block - follow statements until return
+    else_blk = Block(block_id[])
+    block_id[] += 1
+    collect_branch_statements!(else_blk, else_start, code)
+
+    # Create IfOp - no result vars since both branches terminate
+    if_op = IfOp(cond_value, then_blk, else_blk, SSAValue[])
+    push!(block.nested, if_op)
+end
+
+"""
+    collect_branch_statements!(block::Block, start_idx::Int, code::CodeInfo)
+
+Collect statements from start_idx until hitting a return.
+Adds non-control-flow statements to block.stmts and sets the return as terminator.
+"""
+function collect_branch_statements!(block::Block, start_idx::Int, code::CodeInfo)
+    i = start_idx
+    while i <= length(code.code)
+        stmt = code.code[i]
+        if stmt isa ReturnNode
+            block.terminator = stmt
+            break
+        elseif stmt isa GotoNode || stmt isa GotoIfNot
+            # Unexpected control flow - stop
+            break
+        else
+            push!(block.stmts, i)
+        end
+        i += 1
+    end
 end
 
 """
@@ -770,6 +984,8 @@ function find_condition_value(stmt_idx::Int, code::CodeInfo)
             if cond isa SSAValue
                 return cond
             elseif cond isa SlotNumber
+                return cond
+            elseif cond isa Argument
                 return cond
             else
                 # Fallback: condition must be evaluated before
