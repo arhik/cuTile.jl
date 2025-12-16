@@ -354,6 +354,145 @@ function benchmark_matmul()
 end
 
 #=============================================================================
+ Layer Normalization
+=============================================================================#
+
+const LAYERNORM_M = 1024
+const LAYERNORM_N = 2048
+const LAYERNORM_TILE_N = 1024
+const LAYERNORM_EPS = 1f-5
+
+# SIMT naive kernel (2-pass: compute mean/var, then normalize)
+function layernorm_simt_kernel!(X, W, B, Y, Mean, Rstd, N, eps)
+    m = blockIdx().x
+
+    # First pass: compute mean
+    mean_acc = 0.0f0
+    for i in 1:N
+        @inbounds mean_acc += X[m, i]
+    end
+    mean = mean_acc / N
+    @inbounds Mean[m] = mean
+
+    # Second pass: compute variance
+    var_acc = 0.0f0
+    for i in 1:N
+        @inbounds diff = X[m, i] - mean
+        var_acc += diff * diff
+    end
+    var = var_acc / N
+    rstd = 1.0f0 / sqrt(var + eps)
+    @inbounds Rstd[m] = rstd
+
+    # Third pass: normalize and apply affine
+    for i in 1:N
+        @inbounds Y[m, i] = (X[m, i] - mean) * rstd * W[i] + B[i]
+    end
+
+    return
+end
+
+# cuTile kernel (from layernorm.jl)
+function layernorm_cutile_kernel(X::ct.TileArray{Float32, 2}, W::ct.TileArray{Float32, 1},
+                                  B::ct.TileArray{Float32, 1}, Y::ct.TileArray{Float32, 2},
+                                  Mean::ct.TileArray{Float32, 1}, Rstd::ct.TileArray{Float32, 1},
+                                  eps::ct.Constant{Float32}, TILE_N::ct.Constant{Int})
+    bid_m = ct.bid(0)
+    num_tiles = ct.num_tiles(X, 1, (1, TILE_N[]))
+    N = X.sizes[2]
+
+    # Compute mean
+    mean = ct.full((1, TILE_N[]), 0.0f0, Float32)
+    j = Int32(0)
+    while j < num_tiles
+        tx = ct.load(X, (bid_m, j), (1, TILE_N[]))
+        mean = mean .+ tx
+        j += Int32(1)
+    end
+    mean = ct.reduce_sum(mean, 1) / N
+    ct.store(Mean, bid_m, mean)
+
+    # Compute variance
+    var = ct.full((1, TILE_N[]), 0.0f0, Float32)
+    j = Int32(0)
+    while j < num_tiles
+        tx = ct.load(X, (bid_m, j), (1, TILE_N[]))
+        mask = ct.broadcast_to((j * Int32(TILE_N[]) .+ ct.arange((TILE_N[],), Int32)) .< N, (1, TILE_N[]))
+        centered_tx = ct.where(mask, tx .- mean, ct.full((1, TILE_N[]), 0.0f0, Float32))
+        var = var .+ (centered_tx .^ 2.0f0)
+        j += Int32(1)
+    end
+    var = ct.reduce_sum(var, 1) / N
+    rstd = 1.0f0 / sqrt(var .+ eps[])
+    ct.store(Rstd, bid_m, rstd)
+
+    # Normalize and apply affine transformation
+    j = Int32(0)
+    while j < num_tiles
+        tx = ct.load(X, (bid_m, j), (1, TILE_N[]))
+        tw = ct.load(W, j, (TILE_N[],))
+        tb = ct.load(B, j, (TILE_N[],))
+        ty = (tx .- mean) .* rstd
+        ty = ty .* tw .+ tb
+        ct.store(Y, (bid_m, j), ty)
+        j += Int32(1)
+    end
+
+    return
+end
+
+function benchmark_layernorm()
+    println("\nBenchmarking Layer Normalization...")
+    M, N = LAYERNORM_M, LAYERNORM_N
+    println("  Size: $(M)x$(N) ($(M * N * 4 / 1e6) MB)")
+
+    X = -2.3f0 .+ 0.5f0 .* CUDA.rand(Float32, M, N)
+    W = CUDA.randn(Float32, N)
+    B = CUDA.randn(Float32, N)
+    Y = CUDA.zeros(Float32, M, N)
+    Mean = CUDA.zeros(Float32, M)
+    Rstd = CUDA.zeros(Float32, M)
+
+    # Reference result
+    X_cpu = Array(X)
+    W_cpu = Array(W)
+    B_cpu = Array(B)
+    expected_mean = vec(sum(X_cpu, dims=2) ./ N)
+    expected_var = vec(sum((X_cpu .- expected_mean) .^ 2, dims=2) ./ N)
+    expected_rstd = 1.0f0 ./ sqrt.(expected_var .+ LAYERNORM_EPS)
+    normalized = (X_cpu .- expected_mean) .* expected_rstd
+    expected_Y = normalized .* W_cpu' .+ B_cpu'
+
+    results = BenchmarkResult[]
+
+    # SIMT naive (single thread per row)
+    fill!(Y, 0); fill!(Mean, 0); fill!(Rstd, 0)
+    simt_f = () -> @cuda threads=1 blocks=M layernorm_simt_kernel!(X, W, B, Y, Mean, Rstd, N, LAYERNORM_EPS)
+    simt_f()
+    CUDA.synchronize()
+    @assert isapprox(Array(Y), expected_Y, rtol=1e-2, atol=1e-2) "SIMT incorrect!"
+    min_t, mean_t = benchmark_kernel(simt_f)
+    push!(results, BenchmarkResult("SIMT naive", min_t, mean_t))
+
+    # cuTile
+    fill!(Y, 0); fill!(Mean, 0); fill!(Rstd, 0)
+    cutile_f = () -> ct.launch(layernorm_cutile_kernel, M, X, W, B, Y, Mean, Rstd,
+                               ct.Constant(LAYERNORM_EPS), ct.Constant(LAYERNORM_TILE_N))
+    cutile_f()
+    CUDA.synchronize()
+    @assert isapprox(Array(Y), expected_Y, rtol=1e-2, atol=1e-2) "cuTile incorrect!"
+    min_t, mean_t = benchmark_kernel(cutile_f)
+    push!(results, BenchmarkResult("cuTile.jl", min_t, mean_t))
+
+    # Calculate bandwidth (rough estimate: 3 reads of X + W + B, 1 write of Y)
+    bytes = (3 * M * N + N + N + M * N) * sizeof(Float32)
+    bandwidths = [string(round(bytes / (r.min_ms / 1000) / 1e9, digits=1), " GB/s") for r in results]
+
+    print_table("Layer Normalization (Float32)", results; extra_col=("Bandwidth", bandwidths))
+    return results
+end
+
+#=============================================================================
  Main
 =============================================================================#
 
@@ -370,6 +509,7 @@ function main()
     vadd_results = benchmark_vadd()
     transpose_results = benchmark_transpose()
     matmul_results = benchmark_matmul()
+    layernorm_results = benchmark_layernorm()
 
     println()
     println("=" ^ 60)

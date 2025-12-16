@@ -156,9 +156,15 @@ function layer_norm_bwd_dx(DX::ct.TileArray{Float32, 2}, DY::ct.TileArray{Float3
 end
 
 # NOTE: The full backward pass (layer_norm_bwd_dx_partial_dwdb and layer_norm_bwd_dwdb)
-# requires atomic operations for lock-based accumulation of partial gradients.
-# The atomic operations (ct.atomic_cas, ct.atomic_xchg) are implemented but require
-# additional work for the spin-lock pattern used in the Python reference.
+# requires the spinlock pattern for lock-based accumulation of partial dW/dB gradients:
+#   while ct.atomic_cas(lock, 0, 1) == 1: pass  # acquire
+#   ... critical section ...
+#   ct.atomic_xchg(lock, 0)  # release
+#
+# While atomic_cas and atomic_xchg are implemented, the spinlock pattern requires:
+# 1. While loops on tile-valued conditions (comparing Tile{Int32} to Int32)
+# 2. Memory ordering parameters propagated through codegen
+#
 # For now, dW and dB gradients should be computed separately using a reduction kernel.
 
 #=============================================================================
