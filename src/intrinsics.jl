@@ -34,35 +34,101 @@ broadcast_shape((16, 32), (16, 32)) # => (16, 32)
     end
 end
 
-# Special case: same shape returns same shape (fast path)
-@inline broadcast_shape(s1::S, s2::S) where {S <: Tuple} = s1
-
 #=============================================================================
- Tile Arithmetic
+ Tile Arithmetic (element-wise, same shape required)
 =============================================================================#
 
 # These are stub implementations that the compiler intercepts.
-# They return a new Tile with the broadcast result shape, enabling proper type inference.
+# Element-wise operations require matching shapes (Julia-idiomatic).
+# For broadcasting different shapes, use .+, .-, .*, ./ operators.
 
-@noinline function tile_add(a::Tile{T, S1}, b::Tile{T, S2})::Tile{T, broadcast_shape(S1, S2)} where {T, S1, S2}
+@noinline function tile_add(a::Tile{T, S}, b::Tile{T, S})::Tile{T, S} where {T, S}
+    Base.donotdelete(a, b)
+    Tile{T, S}()
+end
+
+@noinline function tile_sub(a::Tile{T, S}, b::Tile{T, S})::Tile{T, S} where {T, S}
+    Base.donotdelete(a, b)
+    Tile{T, S}()
+end
+
+@noinline function tile_mul(a::Tile{T, S}, b::Tile{T, S})::Tile{T, S} where {T, S}
+    Base.donotdelete(a, b)
+    Tile{T, S}()
+end
+
+# Operator overloads dispatch to the intrinsic functions (same shape required)
+Base.:(+)(a::Tile{T, S}, b::Tile{T, S}) where {T, S} = tile_add(a, b)
+Base.:(-)(a::Tile{T, S}, b::Tile{T, S}) where {T, S} = tile_sub(a, b)
+Base.:(*)(a::Tile{T, S}, b::Tile{T, S}) where {T, S} = tile_mul(a, b)
+
+#=============================================================================
+ Tile Broadcasting (different shapes allowed via .+, .-, .*, ./)
+=============================================================================#
+
+public broadcast_to
+
+# Broadcasting intrinsics - allow different shapes, compute broadcast result shape
+@noinline function tile_broadcast_add(a::Tile{T, S1}, b::Tile{T, S2})::Tile{T, broadcast_shape(S1, S2)} where {T, S1, S2}
     Base.donotdelete(a, b)
     Tile{T, broadcast_shape(S1, S2)}()
 end
 
-@noinline function tile_sub(a::Tile{T, S1}, b::Tile{T, S2})::Tile{T, broadcast_shape(S1, S2)} where {T, S1, S2}
+@noinline function tile_broadcast_sub(a::Tile{T, S1}, b::Tile{T, S2})::Tile{T, broadcast_shape(S1, S2)} where {T, S1, S2}
     Base.donotdelete(a, b)
     Tile{T, broadcast_shape(S1, S2)}()
 end
 
-@noinline function tile_mul(a::Tile{T, S1}, b::Tile{T, S2})::Tile{T, broadcast_shape(S1, S2)} where {T, S1, S2}
+@noinline function tile_broadcast_mul(a::Tile{T, S1}, b::Tile{T, S2})::Tile{T, broadcast_shape(S1, S2)} where {T, S1, S2}
     Base.donotdelete(a, b)
     Tile{T, broadcast_shape(S1, S2)}()
 end
 
-# Operator overloads dispatch to the intrinsic functions
-Base.:(+)(a::Tile{T, S1}, b::Tile{T, S2}) where {T, S1, S2} = tile_add(a, b)
-Base.:(-)(a::Tile{T, S1}, b::Tile{T, S2}) where {T, S1, S2} = tile_sub(a, b)
-Base.:(*)(a::Tile{T, S1}, b::Tile{T, S2}) where {T, S1, S2} = tile_mul(a, b)
+@noinline function tile_broadcast_div(a::Tile{T, S1}, b::Tile{T, S2})::Tile{T, broadcast_shape(S1, S2)} where {T, S1, S2}
+    Base.donotdelete(a, b)
+    Tile{T, broadcast_shape(S1, S2)}()
+end
+
+"""
+    broadcast_to(tile::Tile{T, S}, shape::NTuple{N, Int}) -> Tile{T, shape}
+
+Explicitly broadcast a tile to a target shape.
+The source shape must be broadcastable to the target shape.
+
+# Example
+```julia
+row = ct.load(arr, (0, 0), (1, 128))  # Shape (1, 128)
+expanded = ct.broadcast_to(row, (64, 128))  # Shape (64, 128)
+```
+"""
+@noinline function broadcast_to(tile::Tile{T, S}, shape::NTuple{N, Int})::Tile{T, shape} where {T, S, N}
+    Base.donotdelete(tile)
+    Tile{T, shape}()
+end
+
+# Hook into Julia's broadcasting system
+# Define a custom BroadcastStyle for Tiles
+import Base.Broadcast: BroadcastStyle, Broadcasted, broadcastable
+
+struct TileStyle <: BroadcastStyle end
+Base.Broadcast.BroadcastStyle(::Type{<:Tile}) = TileStyle()
+
+# When combining TileStyle with itself, return TileStyle
+Base.Broadcast.BroadcastStyle(::TileStyle, ::TileStyle) = TileStyle()
+
+# Tiles are already broadcastable - return as-is
+Base.Broadcast.broadcastable(t::Tile) = t
+
+# Intercept broadcasted calls for Tile types
+# a .+ b becomes broadcasted(+, a, b) which we intercept here
+Base.Broadcast.broadcasted(::TileStyle, ::typeof(+), a::Tile{T, S1}, b::Tile{T, S2}) where {T, S1, S2} =
+    tile_broadcast_add(a, b)
+Base.Broadcast.broadcasted(::TileStyle, ::typeof(-), a::Tile{T, S1}, b::Tile{T, S2}) where {T, S1, S2} =
+    tile_broadcast_sub(a, b)
+Base.Broadcast.broadcasted(::TileStyle, ::typeof(*), a::Tile{T, S1}, b::Tile{T, S2}) where {T, S1, S2} =
+    tile_broadcast_mul(a, b)
+Base.Broadcast.broadcasted(::TileStyle, ::typeof(/), a::Tile{T, S1}, b::Tile{T, S2}) where {T, S1, S2} =
+    tile_broadcast_div(a, b)
 
 #=============================================================================
  Tile Shape Operations
@@ -334,13 +400,15 @@ Minimum of two integers.
 
 public tile_div
 
-@noinline function tile_div(a::Tile{T, S1}, b::Tile{T, S2})::Tile{T, broadcast_shape(S1, S2)} where {T <: AbstractFloat, S1, S2}
+# Element-wise division requires same shapes (Julia-idiomatic)
+# For broadcasting different shapes, use ./ operator
+@noinline function tile_div(a::Tile{T, S}, b::Tile{T, S})::Tile{T, S} where {T <: AbstractFloat, S}
     Base.donotdelete(a, b)
-    Tile{T, broadcast_shape(S1, S2)}()
+    Tile{T, S}()
 end
 
-# Division operator for tiles
-Base.:(/)(a::Tile{T, S1}, b::Tile{T, S2}) where {T <: AbstractFloat, S1, S2} = tile_div(a, b)
+# Division operator for tiles (same shape required)
+Base.:(/)(a::Tile{T, S}, b::Tile{T, S}) where {T <: AbstractFloat, S} = tile_div(a, b)
 
 # Scalar-tile division (tile / scalar - broadcast scalar to tile)
 @noinline function tile_div_scalar(a::Tile{T, S}, b::T)::Tile{T, S} where {T <: AbstractFloat, S}

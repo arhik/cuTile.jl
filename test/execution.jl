@@ -545,7 +545,7 @@ end
 
 @testset "tile broadcasting" begin
 
-@testset "1D broadcast: (1,) + (128,)" begin
+@testset "1D broadcast: (1,) .+ (128,)" begin
     # Test broadcasting a single-element tile to a larger tile
     function broadcast_1d_kernel(a::ct.TileArray{Float32,1}, b::ct.TileArray{Float32,1},
                                   c::ct.TileArray{Float32,1})
@@ -554,8 +554,8 @@ end
         scalar_tile = ct.load(a, 0, (1,))
         # Load full tile (128 elements)
         full_tile = ct.load(b, pid, (128,))
-        # Broadcast add: (1,) + (128,) -> (128,)
-        result = scalar_tile + full_tile
+        # Broadcast add: (1,) .+ (128,) -> (128,)
+        result = scalar_tile .+ full_tile
         ct.store(c, pid, result)
         return
     end
@@ -575,15 +575,15 @@ end
     @test c_cpu ≈ a_cpu[1] .+ b_cpu rtol=1e-5
 end
 
-@testset "2D broadcast: (1, 128) + (64, 1)" begin
+@testset "2D broadcast: (1, 128) .+ (64, 1)" begin
     # Test broadcasting 2D tiles with complementary shapes
     function broadcast_2d_kernel(a::ct.TileArray{Float32,2}, b::ct.TileArray{Float32,2},
                                   c::ct.TileArray{Float32,2})
         # Load row tile (1, 128) and column tile (64, 1)
         row_tile = ct.load(a, (0, 0), (1, 128))
         col_tile = ct.load(b, (0, 0), (64, 1))
-        # Broadcast add: (1, 128) + (64, 1) -> (64, 128)
-        result = row_tile + col_tile
+        # Broadcast add: (1, 128) .+ (64, 1) -> (64, 128)
+        result = row_tile .+ col_tile
         ct.store(c, (0, 0), result)
         return
     end
@@ -603,13 +603,13 @@ end
     @test c_cpu ≈ expected rtol=1e-5
 end
 
-@testset "broadcast mul: (4, 1) * (1, 8)" begin
+@testset "broadcast mul: (4, 1) .* (1, 8)" begin
     function broadcast_mul_kernel(a::ct.TileArray{Float32,2}, b::ct.TileArray{Float32,2},
                                    c::ct.TileArray{Float32,2})
         col_tile = ct.load(a, (0, 0), (4, 1))
         row_tile = ct.load(b, (0, 0), (1, 8))
-        # Broadcast multiply: (4, 1) * (1, 8) -> (4, 8)
-        result = col_tile * row_tile
+        # Broadcast multiply: (4, 1) .* (1, 8) -> (4, 8)
+        result = col_tile .* row_tile
         ct.store(c, (0, 0), result)
         return
     end
@@ -627,14 +627,14 @@ end
     @test c_cpu ≈ expected rtol=1e-5
 end
 
-@testset "broadcast sub: (128,) - (1,)" begin
+@testset "broadcast sub: (128,) .- (1,)" begin
     function broadcast_sub_kernel(a::ct.TileArray{Float32,1}, b::ct.TileArray{Float32,1},
                                    c::ct.TileArray{Float32,1})
         pid = ct.bid(0)
         full_tile = ct.load(a, pid, (128,))
         scalar_tile = ct.load(b, 0, (1,))
-        # Broadcast subtract: (128,) - (1,) -> (128,)
-        result = full_tile - scalar_tile
+        # Broadcast subtract: (128,) .- (1,) -> (128,)
+        result = full_tile .- scalar_tile
         ct.store(c, pid, result)
         return
     end
@@ -653,14 +653,14 @@ end
     @test c_cpu ≈ a_cpu .- b_cpu[1] rtol=1e-5
 end
 
-@testset "broadcast div: (64, 128) / (1, 128)" begin
+@testset "broadcast div: (64, 128) ./ (1, 128)" begin
     # Divide each row by a scaling vector
     function broadcast_div_kernel(a::ct.TileArray{Float32,2}, scale::ct.TileArray{Float32,2},
                                    c::ct.TileArray{Float32,2})
         data = ct.load(a, (0, 0), (64, 128))
         scale_row = ct.load(scale, (0, 0), (1, 128))
-        # Broadcast divide: (64, 128) / (1, 128) -> (64, 128)
-        result = data / scale_row
+        # Broadcast divide: (64, 128) ./ (1, 128) -> (64, 128)
+        result = data ./ scale_row
         ct.store(c, (0, 0), result)
         return
     end
@@ -677,6 +677,45 @@ end
     c_cpu = Array(c)
     expected = a_cpu ./ scale_cpu
     @test c_cpu ≈ expected rtol=1e-5
+end
+
+@testset "explicit broadcast_to" begin
+    # Test ct.broadcast_to() for explicit shape broadcasting
+    function broadcast_to_kernel(a::ct.TileArray{Float32,2}, c::ct.TileArray{Float32,2})
+        # Load a row tile (1, 128)
+        row_tile = ct.load(a, (0, 0), (1, 128))
+        # Explicitly broadcast to (64, 128)
+        expanded = ct.broadcast_to(row_tile, (64, 128))
+        ct.store(c, (0, 0), expanded)
+        return
+    end
+
+    m, n = 64, 128
+    a = CUDA.rand(Float32, 1, n)
+    c = CUDA.zeros(Float32, m, n)
+
+    ct.launch(broadcast_to_kernel, 1, a, c)
+
+    a_cpu = Array(a)
+    c_cpu = Array(c)
+    # Each row of c should equal the single row of a
+    for i in 1:m
+        @test c_cpu[i, :] ≈ a_cpu[1, :] rtol=1e-5
+    end
+end
+
+@testset "mismatched shapes with + throws MethodError" begin
+    # Verify that + with different tile shapes throws MethodError (Julia-idiomatic)
+    # Note: This tests the type system, not kernel execution
+    tile_a = ct.Tile{Float32, (1, 128)}()
+    tile_b = ct.Tile{Float32, (64, 1)}()
+
+    # + should require same shapes, so this should fail
+    @test_throws MethodError tile_a + tile_b
+
+    # But .+ should work (broadcasting)
+    result = tile_a .+ tile_b
+    @test result isa ct.Tile{Float32, (64, 128)}
 end
 
 end

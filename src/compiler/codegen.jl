@@ -726,6 +726,10 @@ function emit_intrinsic!(ctx::CodegenContext, ::typeof(astype), args, @nospecial
     emit_astype!(ctx, args, result_type)
 end
 
+function emit_intrinsic!(ctx::CodegenContext, ::typeof(broadcast_to), args, @nospecialize(result_type))
+    emit_broadcast_to!(ctx, args, result_type)
+end
+
 #-----------------------------------------------------------------------------
 # Tile arithmetic
 #-----------------------------------------------------------------------------
@@ -828,6 +832,7 @@ function emit_binop!(ctx::CodegenContext, args, float_encoder::Function, int_enc
     TileValue(result_v, result_type_id, result_jltype, result_shape)
 end
 
+# Element-wise tile operations (same shape)
 emit_intrinsic!(ctx::CodegenContext, ::typeof(tile_add), args, @nospecialize(_)) =
     emit_binop!(ctx, args, encode_AddFOp!, encode_AddIOp!)
 
@@ -836,6 +841,19 @@ emit_intrinsic!(ctx::CodegenContext, ::typeof(tile_sub), args, @nospecialize(_))
 
 emit_intrinsic!(ctx::CodegenContext, ::typeof(tile_mul), args, @nospecialize(_)) =
     emit_binop!(ctx, args, encode_MulFOp!, encode_MulIOp!)
+
+# Broadcasting tile operations (different shapes allowed)
+emit_intrinsic!(ctx::CodegenContext, ::typeof(tile_broadcast_add), args, @nospecialize(_)) =
+    emit_binop!(ctx, args, encode_AddFOp!, encode_AddIOp!)
+
+emit_intrinsic!(ctx::CodegenContext, ::typeof(tile_broadcast_sub), args, @nospecialize(_)) =
+    emit_binop!(ctx, args, encode_SubFOp!, encode_SubIOp!)
+
+emit_intrinsic!(ctx::CodegenContext, ::typeof(tile_broadcast_mul), args, @nospecialize(_)) =
+    emit_binop!(ctx, args, encode_MulFOp!, encode_MulIOp!)
+
+emit_intrinsic!(ctx::CodegenContext, ::typeof(tile_broadcast_div), args, @nospecialize(_)) =
+    emit_binop!(ctx, args, encode_DivFOp!, encode_DivIOp!)
 
 # Base operators on Tiles
 emit_intrinsic!(ctx::CodegenContext, ::typeof(Base.:(+)), args, @nospecialize(_)) =
@@ -1507,6 +1525,40 @@ function emit_astype!(ctx::CodegenContext, args::AbstractVector, @nospecialize(r
     end
 
     TileValue(result, target_tile_type, Tile{target_elem, Tuple(tile_shape)}, tile_shape)
+end
+
+#=============================================================================
+ Explicit Broadcasting
+=============================================================================#
+
+function emit_broadcast_to!(ctx::CodegenContext, args::AbstractVector, @nospecialize(result_type))
+    cb = ctx.cb
+    tt = ctx.tt
+
+    # Get source tile
+    source = emit_value!(ctx, args[1])
+    source === nothing && error("Cannot resolve source operand for broadcast_to()")
+
+    # Get source element type
+    source_type = unwrap_type(source.jltype)
+    source_elem = source_type <: Tile ? source_type.parameters[1] : source_type
+
+    # Extract target shape from the constant tuple argument
+    target_shape_tuple = extract_constant(ctx, args[2])
+    target_shape_tuple isa Tuple || error("broadcast_to() shape must be a compile-time constant tuple")
+    target_shape = collect(Int, target_shape_tuple)
+
+    # If already the right shape, return unchanged
+    if source.shape == target_shape
+        return source
+    end
+
+    # Use the existing broadcast helper
+    dtype = julia_to_tile_dtype!(tt, source_elem)
+    result_v = broadcast_tile_to_shape!(cb, tt, source, target_shape, dtype)
+    result_type_id = tile_type!(tt, dtype, target_shape)
+
+    TileValue(result_v, result_type_id, Tile{source_elem, Tuple(target_shape)}, target_shape)
 end
 
 #=============================================================================
