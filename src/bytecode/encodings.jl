@@ -1316,6 +1316,36 @@ function encode_GetTensorShapeOp!(cb::CodeBuilder, result_types::Vector{TypeId},
 end
 
 #=============================================================================
+ Pointer conversion operations
+=============================================================================#
+
+"""
+    encode_PtrToIntOp!(cb, result_type, source) -> Value
+
+Convert a pointer tile to an integer tile.
+Opcode: 86
+"""
+function encode_PtrToIntOp!(cb::CodeBuilder, result_type::TypeId, source::Value)
+    encode_varint!(cb.buf, Opcode.PtrToIntOp)
+    encode_varint!(cb.buf, result_type.id)
+    encode_operand!(cb.buf, source)
+    return new_op!(cb)
+end
+
+"""
+    encode_IntToPtrOp!(cb, result_type, source) -> Value
+
+Convert an integer tile to a pointer tile.
+Opcode: 51
+"""
+function encode_IntToPtrOp!(cb::CodeBuilder, result_type::TypeId, source::Value)
+    encode_varint!(cb.buf, Opcode.IntToPtrOp)
+    encode_varint!(cb.buf, result_type.id)
+    encode_operand!(cb.buf, source)
+    return new_op!(cb)
+end
+
+#=============================================================================
  Atomic operations
 =============================================================================#
 
@@ -1339,8 +1369,9 @@ function encode_AtomicCASPtrOp!(cb::CodeBuilder,
                                  memory_ordering::MemoryOrderingSemantics=MemoryAcqRel,
                                  memory_scope::MemoryScope=ScopeDevice)
     encode_varint!(cb.buf, Opcode.AtomicCASPtrOp)
-    # Variadic result types
-    encode_typeid_seq!(cb.buf, [result_type, token_type])
+    # Result types (no length prefix, per Python reference)
+    encode_varint!(cb.buf, result_type.id)
+    encode_varint!(cb.buf, token_type.id)
 
     # Flags
     flags = 0
@@ -1386,8 +1417,9 @@ function encode_AtomicRMWPtrOp!(cb::CodeBuilder,
                                  memory_ordering::MemoryOrderingSemantics=MemoryAcqRel,
                                  memory_scope::MemoryScope=ScopeDevice)
     encode_varint!(cb.buf, Opcode.AtomicRMWPtrOp)
-    # Variadic result types
-    encode_typeid_seq!(cb.buf, [result_type, token_type])
+    # Result types (no length prefix, per Python reference)
+    encode_varint!(cb.buf, result_type.id)
+    encode_varint!(cb.buf, token_type.id)
 
     # Flags
     flags = 0

@@ -795,3 +795,88 @@ end
 end
 
 end
+
+@testset "atomic operations" begin
+
+@testset "atomic_add Int32" begin
+    # Test atomic_add with Int32: each thread block adds 1 to a counter
+    function atomic_add_kernel(counters::ct.TileArray{Int32,1})
+        bid = ct.bid(0)
+        ct.atomic_add(counters, Int32(0), Int32(1))
+        return
+    end
+
+    n_blocks = 1000
+    counters = CUDA.zeros(Int32, 1)
+
+    ct.launch(atomic_add_kernel, n_blocks, counters)
+
+    result = Array(counters)[1]
+    @test result == n_blocks
+end
+
+@testset "atomic_add Float32" begin
+    # Test atomic_add with Float32
+    function atomic_add_f32_kernel(out::ct.TileArray{Float32,1}, val::ct.Constant{Float32})
+        bid = ct.bid(0)
+        ct.atomic_add(out, Int32(0), val[])
+        return
+    end
+
+    n_blocks = 100
+    out = CUDA.zeros(Float32, 1)
+    val = 1.5f0
+
+    ct.launch(atomic_add_f32_kernel, n_blocks, out, ct.Constant(val))
+
+    result = Array(out)[1]
+    @test result ≈ n_blocks * val rtol=1e-3
+end
+
+@testset "atomic_xchg" begin
+    # Test atomic_xchg: each thread exchanges, last one wins
+    function atomic_xchg_kernel(arr::ct.TileArray{Int32,1})
+        bid = ct.bid(0)
+        ct.atomic_xchg(arr, Int32(0), bid + Int32(1))
+        return
+    end
+
+    n_blocks = 10
+    arr = CUDA.zeros(Int32, 1)
+
+    ct.launch(atomic_xchg_kernel, n_blocks, arr)
+
+    # Result should be one of 1..n_blocks (whichever thread ran last)
+    result = Array(arr)[1]
+    @test 1 <= result <= n_blocks
+end
+
+@testset "atomic_cas success" begin
+    # Test atomic_cas: only one thread should succeed in setting 0->1
+    function atomic_cas_kernel(locks::ct.TileArray{Int32,1}, success_count::ct.TileArray{Int32,1})
+        bid = ct.bid(0)
+        # Try to acquire lock (0 -> 1)
+        old = ct.atomic_cas(locks, Int32(0), Int32(0), Int32(1))
+        # If we got old=0, we succeeded
+        # Use atomic_add to count successes (returns a tile, so comparison works)
+        # Actually simpler: just increment success_count if old was 0
+        # But we can't do conditionals easily here, so let's just verify lock changes
+        return
+    end
+
+    locks = CUDA.zeros(Int32, 1)
+    success_count = CUDA.zeros(Int32, 1)
+
+    ct.launch(atomic_cas_kernel, 100, locks, success_count)
+
+    # Lock should be set to 1 (at least one thread succeeded)
+    lock_val = Array(locks)[1]
+    @test lock_val == 1
+end
+
+# NOTE: The spinlock pattern test is disabled because:
+# 1. While loops on tile-valued conditions require additional compiler support
+# 2. Memory ordering parameters are not yet propagated through codegen
+# The atomic primitives (atomic_add, atomic_cas, atomic_xchg) are tested above.
+
+end

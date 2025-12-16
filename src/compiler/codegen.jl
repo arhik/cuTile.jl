@@ -1474,8 +1474,7 @@ function emit_atomic_cas!(ctx::CodegenContext, args::AbstractVector, @nospeciali
     token_type = Token(tt)
 
     # Create pointer tile - compute pointer to index
-    # For now, just use offset addressing (index * element_size)
-    scalar_i32 = tile_type!(tt, I32(tt), Int[])
+    scalar_i64_type = tile_type!(tt, I64(tt), Int[])
     index_tv = emit_value!(ctx, args[2])
 
     # Create pointer type for element
@@ -1483,11 +1482,18 @@ function emit_atomic_cas!(ctx::CodegenContext, args::AbstractVector, @nospeciali
     ptr_tile_type = tile_type!(tt, ptr_type, Int[])
 
     # Compute pointer: base + index * sizeof(elem)
-    # We need OffsetOp to compute the pointer from base + index
+    # Convert pointer to int64, do arithmetic, convert back
+    ptr_as_int = encode_PtrToIntOp!(cb, scalar_i64_type, array_val)
+
     elem_size = sizeof(elem_type)
-    elem_size_const = emit_constant!(ctx, Int32(elem_size), scalar_i32)
-    index_scaled = encode_MulIOp!(cb, scalar_i32, index_tv.v, elem_size_const)
-    pointers = encode_AddIOp!(cb, ptr_tile_type, array_val, index_scaled)
+    elem_size_const_tv = emit_constant!(ctx, Int64(elem_size), Int64)
+    elem_size_const = elem_size_const_tv.v
+
+    # Extend index to 64-bit if needed
+    index_i64 = encode_ExtIOp!(cb, scalar_i64_type, index_tv.v; signedness=SignednessSigned)
+    index_scaled = encode_MulIOp!(cb, scalar_i64_type, index_i64, elem_size_const)
+    ptr_int_offset = encode_AddIOp!(cb, scalar_i64_type, ptr_as_int, index_scaled)
+    pointers = encode_IntToPtrOp!(cb, ptr_tile_type, ptr_int_offset)
 
     # Emit atomic CAS
     mem_ordering = memory_order_to_semantics(memory_order)
@@ -1537,17 +1543,25 @@ function emit_atomic_rmw!(ctx::CodegenContext, args::AbstractVector, @nospeciali
     token_type = Token(tt)
 
     # Create pointer tile
-    scalar_i32 = tile_type!(tt, I32(tt), Int[])
+    scalar_i64_type = tile_type!(tt, I64(tt), Int[])
     index_tv = emit_value!(ctx, args[2])
 
     ptr_type = pointer_type!(tt, dtype)
     ptr_tile_type = tile_type!(tt, ptr_type, Int[])
 
     # Compute pointer: base + index * sizeof(elem)
+    # Convert pointer to int64, do arithmetic, convert back
+    ptr_as_int = encode_PtrToIntOp!(cb, scalar_i64_type, array_val)
+
     elem_size = sizeof(elem_type)
-    elem_size_const = emit_constant!(ctx, Int32(elem_size), scalar_i32)
-    index_scaled = encode_MulIOp!(cb, scalar_i32, index_tv.v, elem_size_const)
-    pointers = encode_AddIOp!(cb, ptr_tile_type, array_val, index_scaled)
+    elem_size_const_tv = emit_constant!(ctx, Int64(elem_size), Int64)
+    elem_size_const = elem_size_const_tv.v
+
+    # Extend index to 64-bit if needed
+    index_i64 = encode_ExtIOp!(cb, scalar_i64_type, index_tv.v; signedness=SignednessSigned)
+    index_scaled = encode_MulIOp!(cb, scalar_i64_type, index_i64, elem_size_const)
+    ptr_int_offset = encode_AddIOp!(cb, scalar_i64_type, ptr_as_int, index_scaled)
+    pointers = encode_IntToPtrOp!(cb, ptr_tile_type, ptr_int_offset)
 
     # Use float add mode for floating point types
     actual_mode = mode
