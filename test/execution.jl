@@ -1,5 +1,3 @@
-@testset "execution" begin
-
 using CUDA
 
 @testset "launch" begin
@@ -248,8 +246,6 @@ end
     ct.launch(copy_kernel, cld(n, tile_size), src, dst)
 
     @test Array(dst) ≈ Array(src)
-end
-
 end
 
 @testset "math operations" begin

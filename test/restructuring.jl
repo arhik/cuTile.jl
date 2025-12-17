@@ -1,5 +1,3 @@
-@testset "restructuring" verbose=true begin
-
 using cuTile: code_structured, StructuredCodeInfo, Block, IfOp, ForOp, LoopOp,
               YieldOp, ContinueOp, BreakOp, UnstructuredControlFlowError,
               get_typed_ir, structurize!, validate_scf, ControlFlowOp
@@ -618,5 +616,3 @@ end
         @test e isa UnstructuredControlFlowError
     end
 end
-
-end  # @testset "restructuring"

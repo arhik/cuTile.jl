@@ -1,12 +1,8 @@
-using Test
-import cuTile as ct
+using cuTile
+using ParallelTestRunner
 
-@testset "cuTile" verbose=true begin
-
-include("restructuring.jl")
-include("types.jl")
-include("codegen.jl")
-include("execution.jl")
-include("examples.jl")
-
+const init_code = quote
+    import cuTile as ct
 end
+
+runtests(cuTile, ARGS; init_code)

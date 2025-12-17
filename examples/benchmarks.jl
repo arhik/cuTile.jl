@@ -1,3 +1,5 @@
+# EXCLUDE FROM TESTING
+#
 # Comprehensive benchmarks for cuTile.jl
 # Compares: GPUArrays (generic), SIMT (CUDA.jl), cuTile
 # Kernels: vadd, transpose, matmul

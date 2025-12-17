@@ -1,5 +1,3 @@
-@testset "codegen" begin
-
 using CUDA
 sm_arch = ct.default_sm_arch()
 
@@ -260,6 +258,4 @@ end
         @test isempty(results)
         @test cb.num_ops >= 1
     end
-end
-
 end
