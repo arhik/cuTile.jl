@@ -1389,18 +1389,13 @@ Supports multiple sequential (non-nested) loops.
 Returns the entry block with structured control flow.
 """
 function structurize_with_loops(code::CodeInfo, blocks::Vector{BlockInfo}, loops::Vector{LoopInfo})
-    stmts = code.code
-
     # Sort loops by header block index for sequential processing
     sorted_loops = sort(loops, by=l -> l.header)
 
     # Check for nested loops (not yet supported)
     for i in 1:length(sorted_loops)
         for j in i+1:length(sorted_loops)
-            loop_i = sorted_loops[i]
-            loop_j = sorted_loops[j]
-            # Check if loop_j's header is inside loop_i's blocks
-            if loop_j.header in loop_i.blocks
+            if sorted_loops[j].header in sorted_loops[i].blocks
                 error("Nested loops not yet supported")
             end
         end
@@ -1415,65 +1410,32 @@ function structurize_with_loops(code::CodeInfo, blocks::Vector{BlockInfo}, loops
         union!(all_loop_blocks, loop.blocks)
     end
 
-    # Track which exit blocks have been processed (to avoid duplication)
-    processed_exit_blocks = Set{Int}()
-
-    # Process blocks and loops in order
+    # Single-pass: process blocks sequentially, building loop ops when we hit headers.
+    # Exit blocks are naturally encountered after loop blocks since Julia IR is
+    # topologically ordered.
     current_block_idx = 1
-    for (loop_idx, loop) in enumerate(sorted_loops)
-        # Process blocks before this loop (that aren't part of any loop)
-        while current_block_idx < loop.header
-            if current_block_idx ∉ all_loop_blocks
-                collect_block_stmts!(entry, blocks[current_block_idx], code)
-            end
+    loop_idx = 1
+
+    while current_block_idx <= length(blocks)
+        # Check if this block is a loop header
+        if loop_idx <= length(sorted_loops) && current_block_idx == sorted_loops[loop_idx].header
+            loop = sorted_loops[loop_idx]
+
+            # Build the loop op
+            loop_op = build_loop_op(code, blocks, loop, block_id)
+            push!(entry.body, loop_op)
+
+            # Skip past all loop blocks
+            current_block_idx = maximum(loop.blocks) + 1
+            loop_idx += 1
+        elseif current_block_idx ∉ all_loop_blocks
+            # Process non-loop block (includes exit blocks after loops)
+            collect_block_stmts!(entry, blocks[current_block_idx], code)
+            current_block_idx += 1
+        else
+            # Skip loop blocks (already processed as part of loop op)
             current_block_idx += 1
         end
-
-        # Create the LoopOp for this loop
-        loop_op = build_loop_op(code, blocks, loop, block_id)
-        push!(entry.body, loop_op)
-
-        # Find the maximum block index in this loop to skip past it
-        max_loop_block = maximum(loop.blocks)
-
-        # Process exit blocks of this loop (statements between loop exit and next loop/end)
-        # Track which blocks we've processed to avoid duplication
-        for exit_bi in sort(collect(loop.exit_blocks))
-            if exit_bi ∉ all_loop_blocks && exit_bi ∉ processed_exit_blocks
-                push!(processed_exit_blocks, exit_bi)
-                block = blocks[exit_bi]
-                for si in block.range
-                    stmt = stmts[si]
-                    if stmt isa ReturnNode
-                        # Only set terminator if this is the last loop
-                        if loop_idx == length(sorted_loops)
-                            entry.terminator = stmt
-                        end
-                    elseif !(stmt isa GotoNode || stmt isa GotoIfNot || stmt isa PhiNode)
-                        push!(entry.body, si)
-                    end
-                end
-            end
-        end
-
-        # Update current block index to after the loop
-        current_block_idx = max_loop_block + 1
-    end
-
-    # Process any remaining blocks after all loops
-    while current_block_idx <= length(blocks)
-        if current_block_idx ∉ all_loop_blocks && current_block_idx ∉ processed_exit_blocks
-            block = blocks[current_block_idx]
-            for si in block.range
-                stmt = stmts[si]
-                if stmt isa ReturnNode
-                    entry.terminator = stmt
-                elseif !(stmt isa GotoNode || stmt isa GotoIfNot || stmt isa PhiNode)
-                    push!(entry.body, si)
-                end
-            end
-        end
-        current_block_idx += 1
     end
 
     return entry
