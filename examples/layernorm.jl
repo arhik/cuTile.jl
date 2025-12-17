@@ -329,19 +329,37 @@ function main()
     end
 
     # =========================================================================
-    # Backward Pass (dX only)
+    # Backward Pass (Full: dX, dW, dB)
     # =========================================================================
-    println("\n--- Backward Pass (dX) ---")
+    println("\n--- Backward Pass (Full: dX, dW, dB) ---")
 
     # Upstream gradient (random for testing)
     DY = CUDA.randn(Float32, M, N)
     DX = CUDA.zeros(Float32, M, N)
 
-    ct.launch(layer_norm_bwd_dx, M, DX, DY, X, W, Mean, Rstd, ct.Constant(TILE_N))
+    # Parameters for partial gradient accumulation
+    GROUP_SIZE_M = 64
+    TILE_M = 32
 
-    # Compute expected dX on CPU
-    # dX = (W * dY - mean(W * dY) - x_hat * mean(W * dY * x_hat)) * rstd / N
-    # Simplified: dX = rstd * (W * dY - c2 - x_hat * c1)
+    # Partial gradient buffers and locks
+    DW_partial = CUDA.zeros(Float32, GROUP_SIZE_M, N)
+    DB_partial = CUDA.zeros(Float32, GROUP_SIZE_M, N)
+    Locks = CUDA.zeros(Int32, GROUP_SIZE_M)
+
+    # Final gradient buffers
+    FINAL_DW = CUDA.zeros(Float32, N)
+    FINAL_DB = CUDA.zeros(Float32, N)
+
+    # Launch backward kernels
+    ct.launch(layer_norm_bwd_dx_partial_dwdb, M, DX, DY, DW_partial, DB_partial, X, W,
+              Mean, Rstd, Locks, ct.Constant(GROUP_SIZE_M), ct.Constant(TILE_N))
+
+    num_tiles_n = cld(N, TILE_N)
+    ct.launch(layer_norm_bwd_dwdb, num_tiles_n, DW_partial, DB_partial, FINAL_DW, FINAL_DB,
+              ct.Constant(TILE_M), ct.Constant(TILE_N))
+
+    # Compute expected gradients on CPU
+    # dX = rstd * (W * dY - c2 - x_hat * c1)
     # where c1 = mean(x_hat * W * dY), c2 = mean(W * dY)
     DY_cpu = Array(DY)
     wdy = W_cpu' .* DY_cpu
@@ -350,26 +368,48 @@ function main()
     c2 = sum(wdy, dims=2) ./ N
     expected_DX = (wdy .- (xhat .* c1 .+ c2)) .* expected_rstd
 
-    DX_cpu = Array(DX)
-    bwd_ok = isapprox(expected_DX, DX_cpu; rtol, atol)
+    # dW = sum(dY * x_hat, dim=0) and dB = sum(dY, dim=0)
+    expected_DW = vec(sum(DY_cpu .* xhat, dims=1))
+    expected_DB = vec(sum(DY_cpu, dims=1))
 
-    if bwd_ok
-        println("Backward pass (dX): PASSED")
+    # Verify dX
+    DX_cpu = Array(DX)
+    dx_ok = isapprox(expected_DX, DX_cpu; rtol, atol)
+    if dx_ok
+        println("  dX: PASSED")
     else
         max_err = maximum(abs.(expected_DX .- DX_cpu))
-        println("Backward pass (dX): FAILED (max error: $max_err)")
+        println("  dX: FAILED (max error: $max_err)")
     end
 
-    # NOTE: Full backward pass with dW/dB is implemented (layer_norm_bwd_dx_partial_dwdb
-    # and layer_norm_bwd_dwdb) but requires spinlock-based atomic accumulation which has
-    # known issues with atomic memory ordering. See TODO.md for details.
+    # Verify dW
+    FINAL_DW_cpu = Array(FINAL_DW)
+    dw_ok = isapprox(expected_DW, FINAL_DW_cpu; rtol, atol)
+    if dw_ok
+        println("  dW: PASSED")
+    else
+        max_err = maximum(abs.(expected_DW .- FINAL_DW_cpu))
+        println("  dW: FAILED (max error: $max_err)")
+    end
+
+    # Verify dB
+    FINAL_DB_cpu = Array(FINAL_DB)
+    db_ok = isapprox(expected_DB, FINAL_DB_cpu; rtol, atol)
+    if db_ok
+        println("  dB: PASSED")
+    else
+        max_err = maximum(abs.(expected_DB .- FINAL_DB_cpu))
+        println("  dB: FAILED (max error: $max_err)")
+    end
+
+    bwd_ok = dx_ok && dw_ok && db_ok
 
     # =========================================================================
     # Summary
     # =========================================================================
     println("\n=== Summary ===")
-    println("Forward pass:  $(fwd_ok ? "PASSED" : "FAILED")")
-    println("Backward (dX): $(bwd_ok ? "PASSED" : "FAILED")")
+    println("Forward pass:        $(fwd_ok ? "PASSED" : "FAILED")")
+    println("Backward (dX/dW/dB): $(bwd_ok ? "PASSED" : "FAILED")")
 
     (fwd_ok && bwd_ok) || error("LayerNorm tests failed")
 end

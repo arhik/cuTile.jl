@@ -368,6 +368,117 @@ def benchmark_matmul():
 
 
 #=============================================================================
+# Layer Normalization
+#=============================================================================
+
+LAYERNORM_M = 1024
+LAYERNORM_N = 2048
+LAYERNORM_TILE_N = 1024
+LAYERNORM_EPS = 1e-5
+
+
+@ct.kernel
+def layernorm_cutile_kernel(X, W, B, Y, Mean, Rstd, eps: ct.Constant[float], TILE_N: ct.Constant[int]):
+    bid_m = ct.bid(0)
+    num_tiles = ct.num_tiles(X, axis=1, shape=(1, TILE_N))
+    N = X.shape[1]
+
+    # Compute mean
+    mean = ct.full((1, TILE_N), 0, dtype=ct.float32)
+    for j in range(num_tiles):
+        tx = ct.load(X, index=(bid_m, j), shape=(1, TILE_N), padding_mode=ct.PaddingMode.ZERO)
+        mean += tx
+    mean = ct.sum(mean, axis=1) / N
+    ct.store(Mean, index=(bid_m,), tile=mean)
+
+    # Compute variance
+    var = ct.full((1, TILE_N), 0, dtype=ct.float32)
+    for j in range(num_tiles):
+        tx = ct.load(X, index=(bid_m, j), shape=(1, TILE_N), padding_mode=ct.PaddingMode.ZERO)
+        mask = (j * TILE_N + ct.arange(TILE_N, dtype=ct.int32)) < N
+        centered_tx = ct.where(mask, tx - mean, 0)
+        var += centered_tx ** 2
+    var = ct.sum(var, axis=1) / N
+    rstd = 1 / ct.sqrt(var + eps)
+    ct.store(Rstd, index=(bid_m,), tile=rstd)
+
+    # Normalize and apply affine transformation
+    for j in range(num_tiles):
+        tx = ct.load(X, index=(bid_m, j), shape=(1, TILE_N), padding_mode=ct.PaddingMode.ZERO)
+        tw = ct.load(W, index=(j,), shape=(TILE_N,), padding_mode=ct.PaddingMode.ZERO)
+        tb = ct.load(B, index=(j,), shape=(TILE_N,), padding_mode=ct.PaddingMode.ZERO)
+        ty = (tx - mean) * rstd
+        ty = ty * tw + tb
+        ct.store(Y, index=(bid_m, j), tile=ty.astype(Y.dtype))
+
+
+def benchmark_layernorm():
+    print("\nBenchmarking Layer Normalization...")
+    M, N = LAYERNORM_M, LAYERNORM_N
+    print(f"  Size: {M}x{N} ({M * N * 4 / 1e6} MB)")
+
+    # CuPy arrays
+    X_cp = -2.3 + 0.5 * cp.random.randn(M, N).astype(np.float32)
+    W_cp = cp.random.randn(N).astype(np.float32)
+    B_cp = cp.random.randn(N).astype(np.float32)
+    Y_cp = cp.zeros((M, N), dtype=np.float32)
+    Mean_cp = cp.zeros(M, dtype=np.float32)
+    Rstd_cp = cp.zeros(M, dtype=np.float32)
+
+    # PyTorch tensors
+    X_torch = torch.as_tensor(X_cp, device='cuda')
+    W_torch = torch.as_tensor(W_cp, device='cuda')
+    B_torch = torch.as_tensor(B_cp, device='cuda')
+    Y_torch = torch.zeros(M, N, dtype=torch.float32, device='cuda')
+
+    # Reference result
+    X_np = cp.asnumpy(X_cp)
+    W_np = cp.asnumpy(W_cp)
+    B_np = cp.asnumpy(B_cp)
+    expected_mean = np.mean(X_np, axis=1, keepdims=True)
+    expected_var = np.mean((X_np - expected_mean) ** 2, axis=1, keepdims=True)
+    expected_rstd = 1.0 / np.sqrt(expected_var + LAYERNORM_EPS)
+    normalized = (X_np - expected_mean) * expected_rstd
+    expected_Y = normalized * W_np + B_np
+
+    results = []
+
+    # PyTorch F.layer_norm
+    def torch_layernorm():
+        nonlocal Y_torch
+        Y_torch = torch.nn.functional.layer_norm(X_torch, (N,), W_torch, B_torch, LAYERNORM_EPS)
+
+    torch_layernorm()
+    torch.cuda.synchronize()
+    assert np.allclose(Y_torch.cpu().numpy(), expected_Y, rtol=1e-2, atol=1e-2), "PyTorch incorrect!"
+    min_t, mean_t = benchmark_torch(torch_layernorm)
+    results.append(BenchmarkResult("PyTorch", min_t, mean_t))
+
+    # cuTile
+    Y_cp.fill(0)
+    Mean_cp.fill(0)
+    Rstd_cp.fill(0)
+    stream = cp.cuda.get_current_stream()
+
+    def cutile_layernorm():
+        ct.launch(stream, (M,), layernorm_cutile_kernel,
+                  (X_cp, W_cp, B_cp, Y_cp, Mean_cp, Rstd_cp, LAYERNORM_EPS, LAYERNORM_TILE_N))
+
+    cutile_layernorm()
+    cp.cuda.runtime.deviceSynchronize()
+    assert np.allclose(cp.asnumpy(Y_cp), expected_Y, rtol=1e-2, atol=1e-2), "cuTile incorrect!"
+    min_t, mean_t = benchmark_cupy(cutile_layernorm)
+    results.append(BenchmarkResult("cuTile Python", min_t, mean_t))
+
+    # Calculate bandwidth (rough estimate: 3 reads of X + W + B, 1 write of Y)
+    bytes_transferred = (3 * M * N + N + N + M * N) * 4
+    bandwidths = [f"{bytes_transferred / (r.min_ms / 1000) / 1e9:.1f} GB/s" for r in results]
+
+    print_table("Layer Normalization (Float32)", results, extra_col=("Bandwidth", bandwidths))
+    return results
+
+
+#=============================================================================
 # Main
 #=============================================================================
 
@@ -384,6 +495,7 @@ def main():
     vadd_results = benchmark_vadd()
     transpose_results = benchmark_transpose()
     matmul_results = benchmark_matmul()
+    layernorm_results = benchmark_layernorm()
 
     print()
     print("=" * 60)
