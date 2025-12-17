@@ -103,6 +103,7 @@ function emit_kernel!(writer::BytecodeWriter, func_buf::Vector{UInt8},
 
     # Create memory ordering token
     token_type = Token(tt)
+    ctx.token_type = token_type
     ctx.token = encode_MakeTokenOp!(cb, token_type)
 
     # Lower to structured IR
@@ -163,15 +164,30 @@ function emit_control_flow_op!(ctx::CodegenContext, op::IfOp)
         type_id = tile_type_for_julia!(ctx, result_type)
         push!(result_types, type_id)
     end
+    # Add token type as additional result (for memory ordering)
+    push!(result_types, ctx.token_type)
+
+    # Save token before branches
+    token_before = ctx.token
 
     # Emit IfOp with callback-based region building
-    then_body = _ -> emit_block!(ctx, op.then_block)
-    else_body = _ -> emit_block!(ctx, op.else_block)
+    # Each branch will yield its final token via emit_terminator!
+    then_body = function(_)
+        ctx.token = token_before  # Reset to pre-branch token
+        emit_block!(ctx, op.then_block)
+    end
+    else_body = function(_)
+        ctx.token = token_before  # Reset to pre-branch token
+        emit_block!(ctx, op.else_block)
+    end
     results = encode_IfOp!(then_body, else_body, cb, result_types, cond_tv.v)
 
-    # Map result values to SSA values
+    # Last result is the merged token from both branches
+    ctx.token = results[end]
+
+    # Map result values to SSA values (excluding the token)
     for (i, result_var) in enumerate(op.result_vars)
-        if i <= length(results)
+        if i <= length(results) - 1  # Exclude token
             result_type = ssatypes(ctx.target)[result_var.id]
             type_id = tile_type_for_julia!(ctx, result_type)
             ctx[result_var] = TileValue(results[i], type_id, result_type)
@@ -198,6 +214,8 @@ function emit_control_flow_op!(ctx::CodegenContext, op::ForOp)
         tv === nothing && error("Cannot resolve ForOp init value")
         push!(init_values, tv.v)
     end
+    # Add token as additional init value (for memory ordering)
+    push!(init_values, ctx.token)
 
     # Determine result types
     result_types = TypeId[]
@@ -207,11 +225,16 @@ function emit_control_flow_op!(ctx::CodegenContext, op::ForOp)
         @debug "ForOp result_var $result_var: type=$result_type, type_id=$type_id"
         push!(result_types, type_id)
     end
+    # Add token type as additional result (for memory ordering)
+    push!(result_types, ctx.token_type)
     @debug "ForOp result_types: $result_types ($(length(result_types)) types)"
+
+    # Number of user result types (excluding token)
+    n_user_results = length(op.result_vars)
 
     # Emit ForOp with callback-based region building
     body_builder = function(block_args)
-        # Map block arguments (induction var + carried values)
+        # Map block arguments (induction var + carried values + token)
         if !isempty(op.body.args)
             # First block arg is induction variable
             iv_arg = op.body.args[1]
@@ -221,9 +244,9 @@ function emit_control_flow_op!(ctx::CodegenContext, op::ForOp)
             # Also map the induction variable phi SSAValue
             ctx[op.iv_ssa] = iv_tv
 
-            # Remaining are carried values - map both BlockArg and corresponding SSAValue (phi)
+            # Carried values are block_args[2:end-1] (last is token)
             for (i, body_arg) in enumerate(op.body.args[2:end])
-                if i <= length(block_args) - 1 && i <= length(result_types)
+                if i <= length(block_args) - 2 && i <= n_user_results  # -2 for iv and token
                     shape = extract_tile_shape(body_arg.type)
                     tv = TileValue(block_args[i+1], result_types[i], body_arg.type, shape)
                     ctx[body_arg] = tv
@@ -235,13 +258,19 @@ function emit_control_flow_op!(ctx::CodegenContext, op::ForOp)
             end
         end
 
+        # Set token from last block arg
+        ctx.token = block_args[end]
+
         emit_block!(ctx, op.body)
     end
     results = encode_ForOp!(body_builder, cb, result_types, lower_tv.v, upper_tv.v, step_tv.v, init_values)
 
-    # Map result values
+    # Last result is the token
+    ctx.token = results[end]
+
+    # Map user result values (excluding token)
     for (i, result_var) in enumerate(op.result_vars)
-        if i <= length(results)
+        if i <= length(results) - 1  # Exclude token
             result_type = ssatypes(ctx.target)[result_var.id]
             type_id = tile_type_for_julia!(ctx, result_type)
             shape = extract_tile_shape(result_type)
@@ -260,6 +289,8 @@ function emit_control_flow_op!(ctx::CodegenContext, op::LoopOp)
         tv === nothing && error("Cannot resolve LoopOp init value")
         push!(init_values, tv.v)
     end
+    # Add token as additional init value (for memory ordering)
+    push!(init_values, ctx.token)
 
     # Determine result types from init values
     result_types = TypeId[]
@@ -268,12 +299,17 @@ function emit_control_flow_op!(ctx::CodegenContext, op::LoopOp)
         type_id = tile_type_for_julia!(ctx, result_type)
         push!(result_types, type_id)
     end
+    # Add token type as additional result (for memory ordering)
+    push!(result_types, ctx.token_type)
+
+    # Number of user result types (excluding token)
+    n_user_results = length(op.result_vars)
 
     # Emit LoopOp with callback-based region building
     body_builder = function(block_args)
-        # Map block arguments (carried values)
+        # Map block arguments (carried values, last is token)
         for (i, body_arg) in enumerate(op.body.args)
-            if i <= length(block_args) && i <= length(result_types)
+            if i <= length(block_args) - 1 && i <= n_user_results  # -1 for token
                 shape = extract_tile_shape(body_arg.type)
                 ctx[body_arg] = TileValue(block_args[i], result_types[i], body_arg.type, shape)
             end
@@ -283,12 +319,15 @@ function emit_control_flow_op!(ctx::CodegenContext, op::LoopOp)
         # e.g., if %2 is a phi that becomes result_var, references to %2 inside the
         # loop body should resolve to the block argument value
         for (i, result_var) in enumerate(op.result_vars)
-            if i <= length(block_args) && i <= length(result_types)
+            if i <= length(block_args) - 1 && i <= n_user_results  # -1 for token
                 result_type = ssatypes(ctx.target)[result_var.id]
                 shape = extract_tile_shape(result_type)
                 ctx[result_var] = TileValue(block_args[i], result_types[i], result_type, shape)
             end
         end
+
+        # Set token from last block arg
+        ctx.token = block_args[end]
 
         emit_block!(ctx, op.body)
 
@@ -297,14 +336,20 @@ function emit_control_flow_op!(ctx::CodegenContext, op::LoopOp)
         # after the if. Add an unreachable ContinueOp as fallback terminator.
         # This is only reached if the if doesn't cover all paths (which it should).
         if op.body.terminator === nothing
-            encode_ContinueOp!(ctx.cb, block_args)
+            # Include token in fallback continue
+            fallback_operands = copy(block_args)
+            fallback_operands[end] = ctx.token
+            encode_ContinueOp!(ctx.cb, fallback_operands)
         end
     end
     results = encode_LoopOp!(body_builder, cb, result_types, init_values)
 
-    # Map result values
+    # Last result is the token
+    ctx.token = results[end]
+
+    # Map user result values (excluding token)
     for (i, result_var) in enumerate(op.result_vars)
-        if i <= length(results)
+        if i <= length(results) - 1  # Exclude token
             result_type = ssatypes(ctx.target)[result_var.id]
             type_id = tile_type_for_julia!(ctx, result_type)
             shape = extract_tile_shape(result_type)
@@ -330,6 +375,8 @@ function emit_terminator!(ctx::CodegenContext, op::YieldOp)
         @debug "YieldOp value $val => $(tv !== nothing ? tv : "nothing")"
         tv !== nothing && push!(operands, tv.v)
     end
+    # Append current token for memory ordering
+    push!(operands, ctx.token)
     @debug "YieldOp operands: $operands ($(length(operands)) values)"
     encode_YieldOp!(ctx.cb, operands)
 end
@@ -341,6 +388,8 @@ function emit_terminator!(ctx::CodegenContext, op::ContinueOp)
         tv = emit_irvalue!(ctx, val)
         tv !== nothing && push!(operands, tv.v)
     end
+    # Append current token for memory ordering
+    push!(operands, ctx.token)
     encode_ContinueOp!(ctx.cb, operands)
 end
 
@@ -351,6 +400,8 @@ function emit_terminator!(ctx::CodegenContext, op::BreakOp)
         tv = emit_irvalue!(ctx, val)
         tv !== nothing && push!(operands, tv.v)
     end
+    # Append current token for memory ordering
+    push!(operands, ctx.token)
     encode_BreakOp!(ctx.cb, operands)
 end
 
@@ -1343,7 +1394,8 @@ function emit_load!(ctx::CodegenContext, args::AbstractVector, @nospecialize(res
     index_vals = pad_indices(ctx, index_vals, ndim, scalar_i32)
 
     # Load tile with token
-    tile_val, _ = encode_LoadViewTkoOp!(cb, tile_type, token_type, partition, index_vals; token=ctx.token)
+    tile_val, new_token = encode_LoadViewTkoOp!(cb, tile_type, token_type, partition, index_vals; token=ctx.token)
+    ctx.token = new_token
 
     TileValue(tile_val, tile_type, Tile{elem_type, Tuple(tile_shape)}, tile_shape)
 end
@@ -1419,7 +1471,8 @@ function emit_store!(ctx::CodegenContext, args::AbstractVector, @nospecialize(re
 
     # Store tile with token
     token_type = Token(tt)
-    encode_StoreViewTkoOp!(cb, token_type, tile_tv.v, partition, index_vals; token=ctx.token)
+    new_token = encode_StoreViewTkoOp!(cb, token_type, tile_tv.v, partition, index_vals; token=ctx.token)
+    ctx.token = new_token
 
     nothing
 end
@@ -1522,11 +1575,12 @@ function emit_atomic_cas!(ctx::CodegenContext, args::AbstractVector, @nospeciali
     mem_ordering = memory_order_to_semantics(memory_order)
     mem_scope = memory_scope_to_scope(memory_scope)
 
-    old_val, _ = encode_AtomicCASPtrOp!(cb, result_tile_type, token_type, pointers,
+    old_val, new_token = encode_AtomicCASPtrOp!(cb, result_tile_type, token_type, pointers,
                                          expected_tv.v, desired_tv.v;
                                          token=ctx.token,
                                          memory_ordering=mem_ordering,
                                          memory_scope=mem_scope)
+    ctx.token = new_token
 
     # Return scalar type (not Tile) to match the intrinsic signature
     TileValue(old_val, result_tile_type, elem_type, Int[])
@@ -1599,11 +1653,12 @@ function emit_atomic_rmw!(ctx::CodegenContext, args::AbstractVector, @nospeciali
     mem_ordering = memory_order_to_semantics(memory_order)
     mem_scope = memory_scope_to_scope(memory_scope)
 
-    old_val, _ = encode_AtomicRMWPtrOp!(cb, result_tile_type, token_type, pointers,
+    old_val, new_token = encode_AtomicRMWPtrOp!(cb, result_tile_type, token_type, pointers,
                                          val_tv.v, actual_mode;
                                          token=ctx.token,
                                          memory_ordering=mem_ordering,
                                          memory_scope=mem_scope)
+    ctx.token = new_token
 
     # Return scalar type (not Tile) to match the intrinsic signature
     TileValue(old_val, result_tile_type, elem_type, Int[])

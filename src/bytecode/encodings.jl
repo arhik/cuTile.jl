@@ -380,6 +380,22 @@ function encode_MakeTokenOp!(cb::CodeBuilder, result_type::TypeId)
 end
 
 """
+    encode_JoinTokensOp!(cb, result_type, tokens) -> Value
+
+Join multiple tokens into a single token for synchronization.
+Opcode: 60
+"""
+function encode_JoinTokensOp!(cb::CodeBuilder, result_type::TypeId, tokens::Vector{Value})
+    encode_varint!(cb.buf, Opcode.JoinTokensOp)
+    encode_typeid_seq!(cb.buf, [result_type])
+    encode_varint!(cb.buf, length(tokens))
+    for tok in tokens
+        encode_operand!(cb.buf, tok)
+    end
+    return new_op!(cb)
+end
+
+"""
     encode_LoadViewTkoOp!(cb, tile_type, token_type, view, index; kwargs...) -> (Value, Value)
 
 Load a tile from a partition view with token ordering.

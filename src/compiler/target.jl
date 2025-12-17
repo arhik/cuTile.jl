@@ -117,6 +117,7 @@ mutable struct CodegenContext
 
     # Memory ordering token
     token::Union{Value, Nothing}
+    token_type::Union{TypeId, Nothing}
 
     # Type cache: Julia type -> TypeId
     type_cache::Dict{Type, TypeId}
@@ -133,6 +134,7 @@ function CodegenContext(writer::BytecodeWriter, target::TileTarget)
         CodeBuilder(writer.string_table, writer.constant_table, writer.type_table),
         writer.type_table,
         target,
+        nothing,
         nothing,
         Dict{Type, TypeId}()
     )

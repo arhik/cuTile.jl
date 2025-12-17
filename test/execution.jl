@@ -874,9 +874,36 @@ end
     @test lock_val == 1
 end
 
-# NOTE: The spinlock pattern test is disabled because:
-# 1. While loops on tile-valued conditions require additional compiler support
-# 2. Memory ordering parameters are not yet propagated through codegen
-# The atomic primitives (atomic_add, atomic_cas, atomic_xchg) are tested above.
+@testset "spinlock with token ordering" begin
+    # Test that token threading enforces memory ordering in spinlock patterns
+    function spinlock_kernel(result::ct.TileArray{Float32,1}, lock::ct.TileArray{Int32,1})
+        bid = ct.bid(0)
+        val = ct.full((1,), 1.0f0, Float32)
+
+        # Spin until we acquire the lock (CAS returns old value, 0 means we got it)
+        while ct.atomic_cas(lock, Int32(0), Int32(0), Int32(1)) == Int32(1)
+        end
+
+        # Critical section: load, increment, store
+        # With proper token threading, these are ordered after the acquire
+        current = ct.load(result, Int32(0), (1,))
+        updated = current .+ val
+        ct.store(result, Int32(0), updated)
+
+        # Release the lock
+        ct.atomic_xchg(lock, Int32(0), Int32(0))
+        return
+    end
+
+    n_blocks = 50  # Use fewer blocks to reduce test time
+    result = CUDA.zeros(Float32, 1)
+    lock = CUDA.zeros(Int32, 1)
+
+    ct.launch(spinlock_kernel, n_blocks, result, lock)
+
+    # Each block should have added 1.0 to the result
+    final_result = Array(result)[1]
+    @test final_result == Float32(n_blocks)
+end
 
 end
