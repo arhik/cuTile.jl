@@ -148,17 +148,14 @@ end
 Emit bytecode for a structured IR block.
 """
 function emit_block!(ctx::CodegenContext, block::Block)
-    code_stmts = code(ctx.target)
-    types = ssatypes(ctx.target)
-
     # Emit body items (interleaved statements and control flow ops)
     for item in block.body
-        if item isa Int
-            stmt = code_stmts[item]
-            result_type = types[item]
-            emit_statement!(ctx, stmt, item, result_type)
-        else
+        if item isa Statement
+            emit_statement!(ctx, item.expr, item.idx, item.type)
+        elseif item isa ControlFlowOp
             emit_control_flow_op!(ctx, item)
+        else
+            error("Unexpected item type in block body: $(typeof(item))")
         end
     end
 
@@ -408,14 +405,14 @@ function emit_control_flow_op!(ctx::CodegenContext, op::WhileOp)
     n_user_results = length(op.result_vars)
 
     # Emit WhileOp as cuda_tile.loop with if-continue-break pattern
-    # Structure: loop { body_stmts; if (condition) { continue } else { break } }
-    # The body statements include the condition computation, so we emit them first
+    # MLIR structure: before { stmts; condition(cond) args } do { stmts; yield vals }
+    # Emitted as: loop { before_stmts; if(cond) { after_stmts; continue } else { break } }
     body_builder = function(block_args)
-        # Map block arguments (carried values, last is token)
-        for (i, body_arg) in enumerate(op.body.args)
+        # Map block arguments for the "before" region (carried values, last is token)
+        for (i, before_arg) in enumerate(op.before.args)
             if i <= length(block_args) - 1 && i <= n_user_results  # -1 for token
-                shape = extract_tile_shape(body_arg.type)
-                ctx[body_arg] = CGVal(block_args[i], result_types[i], body_arg.type, shape)
+                shape = extract_tile_shape(before_arg.type)
+                ctx[before_arg] = CGVal(block_args[i], result_types[i], before_arg.type, shape)
             end
         end
 
@@ -431,29 +428,51 @@ function emit_control_flow_op!(ctx::CodegenContext, op::WhileOp)
         # Set token from last block arg
         ctx.token = block_args[end]
 
-        # Emit body statements first (this includes the condition computation)
+        # Emit "before" region statements (condition computation)
         code_stmts = code(ctx.target)
         types = ssatypes(ctx.target)
-        for item in op.body.body
-            if item isa Int
-                stmt = code_stmts[item]
-                result_type = types[item]
-                emit_statement!(ctx, stmt, item, result_type)
+        for item in op.before.body
+            if item isa Statement
+                emit_statement!(ctx, item.expr, item.idx, item.type)
             elseif item isa ControlFlowOp
                 emit_control_flow_op!(ctx, item)
             end
         end
 
-        # Now condition should be in context
-        cond_tv = emit_value!(ctx, op.condition)
-        (cond_tv === nothing || cond_tv.v === nothing) && error("Cannot resolve WhileOp condition: $(op.condition)")
+        # Get condition from ConditionOp terminator
+        cond_op = op.before.terminator
+        cond_op isa ConditionOp || error("WhileOp before region must end with ConditionOp")
 
-        # Create if-then-else: if condition { continue } else { break }
+        cond_tv = emit_value!(ctx, cond_op.condition)
+        (cond_tv === nothing || cond_tv.v === nothing) && error("Cannot resolve WhileOp condition: $(cond_op.condition)")
+
+        # Create if-then-else: if condition { after_region; continue } else { break }
         then_body = function(_)
-            # Emit continue with updated carried values
+            # Map "after" region block args to the values from ConditionOp.args
+            for (i, after_arg) in enumerate(op.after.args)
+                if i <= length(cond_op.args)
+                    # The after args receive from condition args
+                    # For now, map them to the same block_args (they should be the same values)
+                    if i <= length(block_args) - 1 && i <= n_user_results
+                        shape = extract_tile_shape(after_arg.type)
+                        ctx[after_arg] = CGVal(block_args[i], result_types[i], after_arg.type, shape)
+                    end
+                end
+            end
+
+            # Emit "after" region statements (loop body)
+            for item in op.after.body
+                if item isa Statement
+                    emit_statement!(ctx, item.expr, item.idx, item.type)
+                elseif item isa ControlFlowOp
+                    emit_control_flow_op!(ctx, item)
+                end
+            end
+
+            # Emit continue with yield values from after region
             continue_operands = Value[]
-            if op.body.terminator isa ContinueOp
-                for val in op.body.terminator.values
+            if op.after.terminator isa YieldOp
+                for val in op.after.terminator.values
                     tv = emit_value!(ctx, val)
                     tv !== nothing && tv.v !== nothing && push!(continue_operands, tv.v)
                 end
@@ -463,10 +482,17 @@ function emit_control_flow_op!(ctx::CodegenContext, op::WhileOp)
         end
 
         else_body = function(_)
-            # Break with current values
+            # Break with ConditionOp args (become loop results)
             break_operands = Value[]
-            for i in 1:n_user_results
-                push!(break_operands, block_args[i])
+            for arg in cond_op.args
+                tv = emit_value!(ctx, arg)
+                tv !== nothing && tv.v !== nothing && push!(break_operands, tv.v)
+            end
+            # If no args, use block_args
+            if isempty(break_operands)
+                for i in 1:n_user_results
+                    push!(break_operands, block_args[i])
+                end
             end
             push!(break_operands, ctx.token)
             encode_BreakOp!(ctx.cb, break_operands)
