@@ -43,12 +43,14 @@ with its type information and metadata.
 
 Similar to Julia compiler's `jl_cgval_t`, this provides a unified representation
 for all values flowing through codegen. A CGVal can be either:
-1. A concrete SSA value (v is set, arg_ref is nothing)
-2. A lazy argument reference chain (v is nothing, arg_ref tracks the access path)
+1. A concrete SSA value (v::Value)
+2. A multi-value result from control flow ops (v::Vector{Value})
+3. A lazy argument reference chain (v is nothing, arg_ref tracks the access path)
+4. A ghost value (v is nothing, zero-size singleton)
 """
 struct CGVal
-    v::Union{Value, Nothing}  # Tile IR value (nothing for ghost values or lazy refs)
-    type_id::Union{TypeId, Nothing}  # Tile IR type (nothing for lazy refs)
+    v::Union{Value, Vector{Value}, Nothing}  # Single value, multi-value, or nothing
+    type_id::Union{TypeId, Nothing}  # Tile IR type (nothing for lazy refs or multi-value)
     jltype::Any               # Original Julia type
     shape::Vector{Int}        # Tile shape (empty for scalars)
     # Lazy argument reference: (arg_idx, [:field, index, ...])
@@ -57,14 +59,18 @@ struct CGVal
     constant::Any             # Compile-time constant value (nothing if not known)
 end
 
-# Convenience constructors for concrete values (constant = nothing by default)
+# Convenience constructors for concrete values
 CGVal(v::Value, type_id::TypeId, @nospecialize(jltype)) =
     CGVal(v, type_id, jltype, Int[], nothing, nothing)
 
 CGVal(v::Value, type_id::TypeId, @nospecialize(jltype), shape::Vector{Int}) =
     CGVal(v, type_id, jltype, shape, nothing, nothing)
 
-# Constructor for lazy argument references (never have constants)
+# Constructor for multi-value results (from loops, ifs)
+CGVal(v::Vector{Value}, @nospecialize(jltype)) =
+    CGVal(v, nothing, jltype, Int[], nothing, nothing)
+
+# Constructor for lazy argument references
 function arg_ref_value(arg_idx::Int, chain::Vector{Union{Symbol, Int}}, @nospecialize(jltype))
     CGVal(nothing, nothing, jltype, Int[], (arg_idx, chain), nothing)
 end
@@ -103,10 +109,10 @@ Holds all state during Tile IR code generation for a kernel function.
 Maps Julia SSA values to CGVals and manages bytecode emission.
 """
 mutable struct CodegenContext
-    # SSA value mapping: original Julia SSA index -> CGVal or Vector{CGVal}
+    # SSA value mapping: original Julia SSA index -> CGVal
     # Uses global/original indices everywhere (no local renumbering)
-    # Loop ops store a Vector{CGVal} (bundle) which is extracted by getfield statements
-    values::Dict{Int, Union{CGVal, Vector{CGVal}}}
+    # Loop/if ops store a CGVal with tuple_values field (extracted by getfield statements)
+    values::Dict{Int, CGVal}
     args::Dict{Int, CGVal}        # Argument index -> CGVal
     slots::Dict{Int, CGVal}       # Slot number -> CGVal
     block_args::Dict{Int, CGVal}  # BlockArg id -> CGVal (for control flow)
@@ -130,7 +136,7 @@ end
 
 function CodegenContext(writer::BytecodeWriter, target::TileTarget)
     CodegenContext(
-        Dict{Int, Union{CGVal, Vector{CGVal}}}(),
+        Dict{Int, CGVal}(),
         Dict{Int, CGVal}(),
         Dict{Int, CGVal}(),
         Dict{Int, CGVal}(),

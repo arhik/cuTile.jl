@@ -275,15 +275,8 @@ function emit_if_op!(ctx::CodegenContext, op::IfOp, @nospecialize(parent_result_
     # Last result is the merged token from both branches
     ctx.token = results[end]
 
-    # Store results as bundle at IfOp's synthesized SSA index
-    # Getfield extraction happens in emit_statement! when processing getfield calls
-    if n_user_results > 0
-        bundle = CGVal[]
-        for i in 1:n_user_results
-            push!(bundle, CGVal(results[i], result_types[i], julia_result_types[i]))
-        end
-        ctx.values[ssa_idx] = bundle
-    end
+    # Store results at IfOp's SSA index (may be empty for void-returning ifs)
+    ctx.values[ssa_idx] = CGVal(results[1:n_user_results], parent_result_type)
 end
 
 function emit_for_op!(ctx::CodegenContext, op::ForOp, @nospecialize(parent_result_type), n_results::Int, ssa_idx::Int)
@@ -359,18 +352,8 @@ function emit_for_op!(ctx::CodegenContext, op::ForOp, @nospecialize(parent_resul
     # Last result is the token
     ctx.token = results[end]
 
-    # Store results as a bundle at the loop's SSA index
-    # Getfield expressions will extract individual results
-    if n_user_results > 0
-        bundle = CGVal[]
-        for i in 1:n_user_results
-            type_id = tile_type_for_julia!(ctx, body_blk.args[i].type)
-            shape = extract_tile_shape(body_blk.args[i].type)
-            tv = CGVal(results[i], type_id, body_blk.args[i].type, shape)
-            push!(bundle, tv)
-        end
-        ctx.values[ssa_idx] = bundle
-    end
+    # Store results at the loop's SSA index (may be empty for void-returning loops)
+    ctx.values[ssa_idx] = CGVal(results[1:n_user_results], parent_result_type)
 end
 
 function emit_loop_op!(ctx::CodegenContext, op::LoopOp, @nospecialize(parent_result_type), n_results::Int, ssa_idx::Int)
@@ -439,18 +422,8 @@ function emit_loop_op!(ctx::CodegenContext, op::LoopOp, @nospecialize(parent_res
     # Last result is the token
     ctx.token = results[end]
 
-    # Store results as a bundle at the loop's SSA index
-    # Getfield expressions will extract individual results
-    if n_user_results > 0
-        bundle = CGVal[]
-        for i in 1:n_user_results
-            type_id = tile_type_for_julia!(ctx, body_blk.args[i].type)
-            shape = extract_tile_shape(body_blk.args[i].type)
-            tv = CGVal(results[i], type_id, body_blk.args[i].type, shape)
-            push!(bundle, tv)
-        end
-        ctx.values[ssa_idx] = bundle
-    end
+    # Store results at the loop's SSA index (may be empty for void-returning loops)
+    ctx.values[ssa_idx] = CGVal(results[1:n_user_results], parent_result_type)
 end
 
 function emit_while_op!(ctx::CodegenContext, op::WhileOp, @nospecialize(parent_result_type), n_results::Int, ssa_idx::Int)
@@ -579,18 +552,8 @@ function emit_while_op!(ctx::CodegenContext, op::WhileOp, @nospecialize(parent_r
     # Last result is the token
     ctx.token = results[end]
 
-    # Store results as a bundle at the loop's SSA index
-    # Getfield expressions will extract individual results
-    if n_user_results > 0
-        bundle = CGVal[]
-        for i in 1:n_user_results
-            type_id = tile_type_for_julia!(ctx, before_blk.args[i].type)
-            shape = extract_tile_shape(before_blk.args[i].type)
-            tv = CGVal(results[i], type_id, before_blk.args[i].type, shape)
-            push!(bundle, tv)
-        end
-        ctx.values[ssa_idx] = bundle
-    end
+    # Store results at the loop's SSA index (may be empty for void-returning loops)
+    ctx.values[ssa_idx] = CGVal(results[1:n_user_results], parent_result_type)
 end
 
 """
@@ -648,6 +611,28 @@ function emit_terminator!(ctx::CodegenContext, ::ConditionOp)
     # ConditionOp is handled specially by emit_while_op!, not emitted as a terminator
 end
 
+"""
+    emit_getfield!(ctx, args) -> Union{CGVal, Nothing}
+
+Handle getfield on multi-value results (loops, ifs). Returns CGVal if handled,
+nothing if this is not a multi-value extraction and normal handling should proceed.
+This is a compile-time lookup - no Tile IR is emitted.
+"""
+function emit_getfield!(ctx::CodegenContext, args::Vector{Any})
+    length(args) >= 2 || return nothing
+    args[1] isa SSAValue || return nothing
+
+    ref_cgval = get(ctx.values, args[1].id, nothing)
+    ref_cgval === nothing && return nothing
+    ref_cgval.v isa Vector{Value} || return nothing
+
+    field_idx = args[2]::Int
+    v = ref_cgval.v[field_idx]
+    elem_type = ref_cgval.jltype.parameters[field_idx]
+    type_id = tile_type_for_julia!(ctx, elem_type)
+    shape = extract_tile_shape(elem_type)
+    CGVal(v, type_id, elem_type, shape)
+end
 
 #=============================================================================
  Statement Emission
@@ -664,18 +649,6 @@ function emit_statement!(ctx::CodegenContext, @nospecialize(stmt), ssa_idx::Int,
     if stmt isa ReturnNode
         emit_return!(ctx, stmt)
     elseif stmt isa Expr
-        # Handle getfield for loop result bundle extraction
-        if stmt.head === :call && length(stmt.args) >= 3 &&
-           stmt.args[1] === Core.getfield && stmt.args[2] isa SSAValue
-            tuple_ref = stmt.args[2]::SSAValue
-            bundle = get(ctx.values, tuple_ref.id, nothing)
-            if bundle isa Vector{CGVal}
-                field_idx = stmt.args[3]::Int
-                tv = bundle[field_idx]
-                ctx.values[ssa_idx] = tv
-                return  # Early return - already stored
-            end
-        end
         tv = emit_expr!(ctx, stmt, result_type)
         if tv === nothing
             # If emit_expr! returns nothing, try emit_value! for ghost values like tuples
@@ -899,8 +872,14 @@ Emit bytecode for a function call.
 function emit_call!(ctx::CodegenContext, expr::Expr, @nospecialize(result_type))
     args = expr.args
     func = resolve_function(ctx, args[1])
-
     call_args = args[2:end]
+
+    # Handle getfield on multi-value results (compile-time extraction, no code emitted)
+    if func === Core.getfield
+        tv = emit_getfield!(ctx, call_args)
+        tv !== nothing && return tv
+    end
+
     result = emit_intrinsic!(ctx, func, call_args, result_type)
     result === missing && error("Unknown function call: $func")
     return result
