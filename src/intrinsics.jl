@@ -516,10 +516,14 @@ The input tiles must have compatible shapes:
 end
 
 """
-    matmul(a::Tile{T1, (M, K)}, b::Tile{T2, (K, N)}) -> Tile{T1, (M, N)}
+    matmul(a::Tile{T1, S}, b::Tile{T2, S}) -> Tile{T1, S}
 
 Perform matrix multiplication: result = a @ b.
-Equivalent to `mma(a, b, zeros((M, N), T1))`.
+Equivalent to `mma(a, b, zeros(output_shape, T1))`.
+
+Supports both 2D and 3D (batched) inputs:
+- 2D: a:(M, K) × b:(K, N) → (M, N)
+- 3D: a:(B, M, K) × b:(B, K, N) → (B, M, N)  (or b:(1, K, N) for broadcasting)
 
 # Example
 ```julia
@@ -527,9 +531,24 @@ c = ct.matmul(a, b)  # c = a @ b
 ```
 """
 @inline function matmul(a::Tile{T1, SA}, b::Tile{T2, SB}) where {T1, T2, SA, SB}
+    _matmul(a, b, Val(length(SA)))
+end
+
+# 2D matmul: (M, K) × (K, N) → (M, N)
+@inline function _matmul(a::Tile{T1, SA}, b::Tile{T2, SB}, ::Val{2}) where {T1, T2, SA, SB}
     M = SA[1]
     N = SB[2]
     acc = zeros((M, N), T1)
+    mma(a, b, acc)
+end
+
+# 3D batched matmul: (B, M, K) × (B, K, N) → (B, M, N)
+# Also supports broadcasting: (1, M, K) × (B, K, N) or (B, M, K) × (1, K, N)
+@inline function _matmul(a::Tile{T1, SA}, b::Tile{T2, SB}, ::Val{3}) where {T1, T2, SA, SB}
+    B = max(SA[1], SB[1])  # Broadcast batch dimension
+    M = SA[2]
+    N = SB[3]
+    acc = zeros((B, M, N), T1)
     mma(a, b, acc)
 end
 
