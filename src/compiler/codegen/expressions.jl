@@ -65,6 +65,10 @@ function emit_call!(ctx::CodegenContext, expr::Expr, @nospecialize(result_type))
     func = resolve_function(ctx, args[1])
     call_args = args[2:end]
 
+    # TODO: This is normally dynamic dispatch, which we should allow.
+    #       However, we currently trigger this when emitting Julia intrinsics.
+    #       We should switch to our own intrinsics entirely, which are only invoked.
+
     if func === Core.getfield
         tv = emit_getfield!(ctx, call_args, result_type)
         tv !== nothing && return tv
