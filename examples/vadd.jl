@@ -9,7 +9,7 @@ import cuTile as ct
 # TileArray carries size/stride metadata, Constant is a ghost type
 function vec_add_kernel_1d(a::ct.TileArray{T,1}, b::ct.TileArray{T,1}, c::ct.TileArray{T,1},
                            tile::ct.Constant{Int}) where {T}
-    bid = ct.bid(0)
+    bid = ct.bid(1)
     a_tile = ct.load(a, bid, (tile[],))
     b_tile = ct.load(b, bid, (tile[],))
     ct.store(c, bid, a_tile + b_tile)
@@ -19,8 +19,8 @@ end
 # 2D kernel with TileArray and constant tile sizes
 function vec_add_kernel_2d(a::ct.TileArray{T,2}, b::ct.TileArray{T,2}, c::ct.TileArray{T,2},
                            tile_x::ct.Constant{Int}, tile_y::ct.Constant{Int}) where {T}
-    bid_x = ct.bid(0)
-    bid_y = ct.bid(1)
+    bid_x = ct.bid(1)
+    bid_y = ct.bid(2)
     a_tile = ct.load(a, (bid_x, bid_y), (tile_x[], tile_y[]))
     b_tile = ct.load(b, (bid_x, bid_y), (tile_x[], tile_y[]))
     ct.store(c, (bid_x, bid_y), a_tile + b_tile)
@@ -60,22 +60,22 @@ end
 # explicit control over indices (e.g., for non-contiguous access patterns)
 function vec_add_kernel_1d_gather(a::ct.TileArray{T,1}, b::ct.TileArray{T,1}, c::ct.TileArray{T,1},
                                    tile::ct.Constant{Int}) where {T}
-    bid = ct.bid(0)
-    # Create index tile: [0, 1, 2, ..., tile-1] for this block's elements
-    offsets = ct.arange((tile[],), Int32)
-    # Compute global indices: bid * tile + offsets
-    # Use broadcast to add scalar bid*tile to each element of offsets
-    base = ct.Tile(bid * Int32(tile[]))
+    bid = ct.bid(1)
+    # Create index tile: [1, 2, 3, ..., tile] for this block's elements (1-indexed)
+    offsets = ct.arange((tile[],), Int32) .+ Int32(1)
+    # Compute global indices: (bid-1) * tile + offsets
+    # bid is 1-indexed, so (bid-1) gives 0-indexed block offset
+    base = ct.Tile((bid - Int32(1)) * Int32(tile[]))
     indices = ct.broadcast_to(base, (tile[],)) .+ offsets
 
-    # Gather elements using explicit indices
+    # Gather elements using explicit indices (1-indexed)
     a_tile = ct.gather(a, indices)
     b_tile = ct.gather(b, indices)
 
     # Perform addition
     sum_tile = a_tile + b_tile
 
-    # Scatter result back to output array
+    # Scatter result back to output array (1-indexed)
     ct.scatter(c, indices, sum_tile)
     return
 end

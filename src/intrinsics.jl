@@ -228,16 +228,17 @@ end
     permute(tile::Tile{T, S}, perm::NTuple{N, Int}) -> Tile{T, permuted_shape}
 
 Permute the dimensions of a tile according to the given permutation.
-The permutation uses 0-indexed axes (matching cuTile Python convention).
+The permutation uses 1-indexed axes (Julia convention).
 
 # Example
 ```julia
-tile = ct.load(arr, (0, 0, 0), (2, 3, 4))  # Shape (2, 3, 4)
-# Permute axes: new_axis_0 = old_axis_2, new_axis_1 = old_axis_0, new_axis_2 = old_axis_1
-permuted = ct.permute(tile, (2, 0, 1))  # Shape (4, 2, 3)
+tile = ct.load(arr, (1, 1, 1), (2, 3, 4))  # Shape (2, 3, 4)
+# Permute axes: new_axis_1 = old_axis_3, new_axis_2 = old_axis_1, new_axis_3 = old_axis_2
+permuted = ct.permute(tile, (3, 1, 2))  # Shape (4, 2, 3)
 ```
 """
-@noinline function permute(tile::Tile{T, S}, ::Val{Perm}) where {T, S, Perm}
+# Internal function - receives 0-indexed permutation (for compiler)
+@noinline function _permute(tile::Tile{T, S}, ::Val{Perm}) where {T, S, Perm}
     Base.donotdelete(tile)
     # Compute permuted shape: for each position i in output, take S[Perm[i]+1]
     # (Perm is 0-indexed, S is 1-indexed tuple access)
@@ -245,8 +246,11 @@ permuted = ct.permute(tile, (2, 0, 1))  # Shape (4, 2, 3)
     Tile{T, permuted_shape}()
 end
 
-# Convenience overload - inline wrapper that converts tuple to Val
-@inline permute(tile::Tile{T, S}, perm::NTuple{N, Int}) where {T, S, N} = permute(tile, Val(perm))
+# Public API - both forms accept 1-indexed permutation
+@inline permute(tile::Tile{T, S}, ::Val{Perm}) where {T, S, Perm} =
+    _permute(tile, Val(map(p -> p - 1, Perm)))
+@inline permute(tile::Tile{T, S}, perm::NTuple{N, Int}) where {T, S, N} =
+    _permute(tile, Val(map(p -> p - 1, perm)))
 
 public extract
 
@@ -258,58 +262,62 @@ Extract a sub-tile from a tile at the given slice indices.
 **IMPORTANT:** The `index` parameter specifies SLICE INDICES, not element offsets!
 
 For each dimension, the source tile is divided into `S[i] ÷ shape[i]` non-overlapping slices.
-The `index[i]` selects which slice to extract (0-indexed).
+The `index[i]` selects which slice to extract (1-indexed).
 
 # Example: Extracting quadrants from an 8×8 tile
 ```julia
-tile = ct.load(arr, (0, 0), (8, 8))
-# 8÷4 = 2 slices per dimension, so valid indices are {0, 1} × {0, 1}
-tl = ct.extract(tile, (0, 0), (4, 4))  # Top-left (rows 0-3, cols 0-3)
-bl = ct.extract(tile, (1, 0), (4, 4))  # Bottom-left (rows 4-7, cols 0-3)
-tr = ct.extract(tile, (0, 1), (4, 4))  # Top-right (rows 0-3, cols 4-7)
-br = ct.extract(tile, (1, 1), (4, 4))  # Bottom-right (rows 4-7, cols 4-7)
+tile = ct.load(arr, (1, 1), (8, 8))
+# 8÷4 = 2 slices per dimension, so valid indices are {1, 2} × {1, 2}
+tl = ct.extract(tile, (1, 1), (4, 4))  # Top-left (rows 1-4, cols 1-4)
+bl = ct.extract(tile, (2, 1), (4, 4))  # Bottom-left (rows 5-8, cols 1-4)
+tr = ct.extract(tile, (1, 2), (4, 4))  # Top-right (rows 1-4, cols 5-8)
+br = ct.extract(tile, (2, 2), (4, 4))  # Bottom-right (rows 5-8, cols 5-8)
 ```
 
 # Example: Separating real/imag components (FFT pattern)
 ```julia
 # Shape (BS, N, 2) where last dim is real/imag
-tile = ct.load(arr, (0, 0, 0), (BS, N, 2))
-# 2÷1 = 2 slices in last dim, valid indices are {0, 1}
-real_part = ct.extract(tile, (0, 0, 0), (BS, N, 1))  # Slice 0 = real
-imag_part = ct.extract(tile, (0, 0, 1), (BS, N, 1))  # Slice 1 = imag
+tile = ct.load(arr, (1, 1, 1), (BS, N, 2))
+# 2÷1 = 2 slices in last dim, valid indices are {1, 2}
+real_part = ct.extract(tile, (1, 1, 1), (BS, N, 1))  # Slice 1 = real
+imag_part = ct.extract(tile, (1, 1, 2), (BS, N, 1))  # Slice 2 = imag
 ```
 """
-@noinline function extract(tile::Tile{T, S}, ::Val{Index}, ::Val{Shape}) where {T, S, Index, Shape}
+# Internal function - receives 0-indexed slice indices (for compiler)
+@noinline function _extract(tile::Tile{T, S}, ::Val{Index}, ::Val{Shape}) where {T, S, Index, Shape}
     Base.donotdelete(tile)
     Tile{T, Shape}()
 end
 
-# Convenience overload - inline wrapper that converts tuples to Val
+# Public API - both forms accept 1-indexed slice indices
+@inline extract(tile::Tile{T, S}, ::Val{Index}, ::Val{Shape}) where {T, S, Index, Shape} =
+    _extract(tile, Val(map(i -> i - 1, Index)), Val(Shape))
 @inline extract(tile::Tile{T, S}, index::NTuple{N, Int}, shape::NTuple{M, Int}) where {T, S, N, M} =
-    extract(tile, Val(index), Val(shape))
+    _extract(tile, Val(map(i -> i - 1, index)), Val(shape))
 
 public cat
 
 """
     cat(tiles::Tuple{Tile, Tile}, axis::Int) -> Tile
 
-Concatenate two tiles along the specified axis.
+Concatenate two tiles along the specified axis (1-indexed).
 Supports negative axis (e.g., -1 for last dimension).
 
 # Example
 ```julia
-tile_a = ct.load(arr_a, (0,), (4, 8))  # Shape (4, 8)
-tile_b = ct.load(arr_b, (0,), (4, 8))  # Shape (4, 8)
-# Concatenate along axis 0: (4, 8) + (4, 8) -> (8, 8)
-combined = ct.cat((tile_a, tile_b), 0)
+tile_a = ct.load(arr_a, (1,), (4, 8))  # Shape (4, 8)
+tile_b = ct.load(arr_b, (1,), (4, 8))  # Shape (4, 8)
+# Concatenate along axis 1: (4, 8) + (4, 8) -> (8, 8)
+combined = ct.cat((tile_a, tile_b), 1)
 # Concatenate along axis -1 (last): (4, 8) + (4, 8) -> (4, 16)
 combined_last = ct.cat((tile_a, tile_b), -1)
 ```
 """
-@noinline function cat(tiles::Tuple{Tile{T, S1}, Tile{T, S2}}, ::Val{Axis}) where {T, S1, S2, Axis}
+# Internal function - receives 0-indexed axis (for compiler)
+@noinline function _cat(tiles::Tuple{Tile{T, S1}, Tile{T, S2}}, ::Val{Axis}) where {T, S1, S2, Axis}
     Base.donotdelete(tiles)
     # Compute output shape: dimensions must match except at the concatenation axis
-    # Handle negative axis
+    # Axis is 0-indexed (from wrapper conversion)
     ndims = length(S1)
     axis = Axis < 0 ? ndims + Axis : Axis
     # Result shape: sum the sizes along axis, keep others same
@@ -323,9 +331,15 @@ combined_last = ct.cat((tile_a, tile_b), -1)
     Tile{T, result_shape}()
 end
 
-# Convenience overload - inline wrapper that converts axis to Val
-@inline cat(tiles::Tuple{Tile{T, S1}, Tile{T, S2}}, axis::Int) where {T, S1, S2} =
-    cat(tiles, Val(axis))
+# Public API - both forms accept 1-indexed axis (negative stays as-is)
+@inline function cat(tiles::Tuple{Tile{T, S1}, Tile{T, S2}}, ::Val{Axis}) where {T, S1, S2, Axis}
+    axis0 = Axis < 0 ? Axis : Axis - 1
+    _cat(tiles, Val(axis0))
+end
+@inline function cat(tiles::Tuple{Tile{T, S1}, Tile{T, S2}}, axis::Int) where {T, S1, S2}
+    axis0 = axis < 0 ? axis : axis - 1
+    _cat(tiles, Val(axis0))
+end
 
 #=============================================================================
  GPU Intrinsics (stub implementations for host-side)
@@ -343,23 +357,29 @@ public bid, num_blocks, load, store
 """
     bid(axis) -> Int32
 
-Get the block ID along the given axis (0=x, 1=y, 2=z).
+Get the block ID along the given axis (1=x, 2=y, 3=z).
+Returns a 1-indexed block ID (first block is 1, not 0).
 In kernel code, this is compiled to GetTileBlockIdOp.
 """
-@noinline bid(axis::Integer)::Int32 = Base.inferencebarrier(zero(Int32))
+@noinline _bid(axis::Integer)::Int32 = Base.inferencebarrier(zero(Int32))
+@inline bid(axis::Integer)::Int32 = _bid(axis - one(axis)) + Int32(1)
 
 """
     num_blocks(axis) -> Int32
 
-Get the grid size along the given axis (0=x, 1=y, 2=z).
+Get the grid size along the given axis (1=x, 2=y, 3=z).
 In kernel code, this is compiled to GetNumTileBlocksOp.
 """
-@noinline num_blocks(axis::Integer)::Int32 = Base.inferencebarrier(zero(Int32))
+@noinline _num_blocks(axis::Integer)::Int32 = Base.inferencebarrier(zero(Int32))
+@inline num_blocks(axis::Integer)::Int32 = _num_blocks(axis - one(axis))
+
+# Helper: subtract 1 from each element of a tuple, preserving element types
+@inline _sub1(index::NTuple{N, T}) where {N, T} = ntuple(i -> index[i] - one(T), Val(N))
 
 """
     load(ptr, index, shape::NTuple{N, Int}) -> Tile{T, shape}
 
-Load a tile from a pointer at the given index with the specified shape.
+Load a tile from a pointer at the given index (1-indexed) with the specified shape.
 In kernel code, this is compiled to LoadViewTkoOp.
 
 Returns a `Tile{T, Shape}` where T is the pointer element type and Shape
@@ -370,14 +390,14 @@ is the compile-time constant shape tuple.
 @noinline function _load(ptr::Ptr{T}, ::Val{shape}, indices...) where {T, shape}
     Tile{T, shape}()
 end
-# Public API - inline wrapper that captures shape and splats indices
-@inline load(ptr::Ptr{T}, index, shape::NTuple{N, Int}) where {T, N} = _load(ptr, Val(shape), index...)
-@inline load(ptr::Ptr{T}, index::Integer, shape::NTuple{N, Int}) where {T, N} = _load(ptr, Val(shape), index)
+# Public API - inline wrapper that converts 1-indexed to 0-indexed
+@inline load(ptr::Ptr{T}, index, shape::NTuple{N, Int}) where {T, N} = _load(ptr, Val(shape), _sub1(index)...)
+@inline load(ptr::Ptr{T}, index::Integer, shape::NTuple{N, Int}) where {T, N} = _load(ptr, Val(shape), index - one(index))
 
 """
     store(ptr, index, tile::Tile) -> Nothing
 
-Store a tile to a pointer at the given index.
+Store a tile to a pointer at the given index (1-indexed).
 In kernel code, this is compiled to StoreViewTkoOp.
 """
 # Internal function with variadic indices for SROA
@@ -385,9 +405,9 @@ In kernel code, this is compiled to StoreViewTkoOp.
     Base.donotdelete(ptr, tile, indices...)
     nothing
 end
-# Public API - inline wrapper that splats indices
-@inline store(ptr::Ptr{T}, index, tile::Tile{T}) where T = _store(ptr, tile, index...)
-@inline store(ptr::Ptr{T}, index::Integer, tile::Tile{T}) where T = _store(ptr, tile, index)
+# Public API - inline wrapper that converts 1-indexed to 0-indexed
+@inline store(ptr::Ptr{T}, index, tile::Tile{T}) where T = _store(ptr, tile, _sub1(index)...)
+@inline store(ptr::Ptr{T}, index::Integer, tile::Tile{T}) where T = _store(ptr, tile, index - one(index))
 
 # TileArray overloads - these are intercepted by the compiler
 # The compiler extracts ptr/sizes/strides from the destructured TileArray
@@ -400,7 +420,7 @@ The TileArray's sizes and strides are used to construct the TensorView.
 
 # Arguments
 - `arr`: The TileArray to load from
-- `index`: The tile index (0-indexed)
+- `index`: The tile index (1-indexed)
 - `shape`: The tile shape (must be compile-time constants)
 - `padding_mode`: Behavior for out-of-bounds loads (default: Undetermined)
 
@@ -423,41 +443,41 @@ tile = ct.load(arr, (bid,), (TILE_N[],); padding_mode=ct.PaddingMode.Zero)
     Base.donotdelete(arr, indices..., padding_mode)
     Tile{T, shape}()
 end
-# Public API - inline wrapper that captures shape and splats indices
+# Public API - inline wrapper that converts 1-indexed to 0-indexed
 @inline function load(arr::TileArray{T, N}, index, shape::NTuple{M, Int};
                       padding_mode::Int=PaddingMode.Undetermined) where {T, N, M}
-    _load(arr, Val(shape), padding_mode, index...)
+    _load(arr, Val(shape), padding_mode, _sub1(index)...)
 end
 
 # Single index (scalar) - no splatting needed
 @inline function load(arr::TileArray{T, N}, index::Integer, shape::NTuple{M, Int};
                       padding_mode::Int=PaddingMode.Undetermined) where {T, N, M}
-    _load(arr, Val(shape), padding_mode, index)
+    _load(arr, Val(shape), padding_mode, index - one(index))
 end
 
 # Load with Constant shape tuple (1D) - extracts value from Constant type parameter
 @inline function load(arr::TileArray{T, N}, index, shape::Tuple{Constant{Int, V}};
                       padding_mode::Int=PaddingMode.Undetermined) where {T, N, V}
-    _load(arr, Val((V,)), padding_mode, index...)
+    _load(arr, Val((V,)), padding_mode, _sub1(index)...)
 end
 
 # Load with Constant shape tuple (2D)
 @inline function load(arr::TileArray{T, N}, index, shape::Tuple{Constant{Int, V1}, Constant{Int, V2}};
                       padding_mode::Int=PaddingMode.Undetermined) where {T, N, V1, V2}
-    _load(arr, Val((V1, V2)), padding_mode, index...)
+    _load(arr, Val((V1, V2)), padding_mode, _sub1(index)...)
 end
 
 # Load with Constant shape tuple (3D)
 @inline function load(arr::TileArray{T, N}, index, shape::Tuple{Constant{Int, V1}, Constant{Int, V2}, Constant{Int, V3}};
                       padding_mode::Int=PaddingMode.Undetermined) where {T, N, V1, V2, V3}
-    _load(arr, Val((V1, V2, V3)), padding_mode, index...)
+    _load(arr, Val((V1, V2, V3)), padding_mode, _sub1(index)...)
 end
 
 # Keyword argument version for ct.load(arr; index=..., shape=..., padding_mode=...)
 @inline function load(arr::TileArray{T, N}; index, shape,
                       padding_mode::Int=PaddingMode.Undetermined) where {T, N}
     shape_val = _extract_shape(shape)
-    _load(arr, Val(shape_val), padding_mode, index...)
+    _load(arr, Val(shape_val), padding_mode, _sub1(index)...)
 end
 
 # Helper to extract compile-time shape from various tuple types
@@ -469,7 +489,7 @@ end
 """
     store(arr::TileArray, index, tile::Tile) -> Nothing
 
-Store a tile to a TileArray at the given index.
+Store a tile to a TileArray at the given index (1-indexed).
 """
 # Internal function with variadic indices at the end for SROA
 @noinline function _store(arr::TileArray{T, N}, tile::Tile{T}, indices...) where {T, N}
@@ -477,19 +497,19 @@ Store a tile to a TileArray at the given index.
     nothing
 end
 
-# Public API - inline wrapper that splats indices
+# Public API - inline wrapper that converts 1-indexed to 0-indexed
 @inline function store(arr::TileArray{T, N}, index, tile::Tile{T}) where {T, N}
-    _store(arr, tile, index...)
+    _store(arr, tile, _sub1(index)...)
 end
 
 # Single index (scalar) - no splatting needed
 @inline function store(arr::TileArray{T, N}, index::Integer, tile::Tile{T}) where {T, N}
-    _store(arr, tile, index)
+    _store(arr, tile, index - one(index))
 end
 
 # Keyword argument version for ct.store(arr; index=..., tile=...)
 @inline function store(arr::TileArray{T, N}; index, tile::Tile{T}) where {T, N}
-    _store(arr, tile, index...)
+    _store(arr, tile, _sub1(index)...)
 end
 
 #=============================================================================
@@ -616,23 +636,26 @@ public num_tiles
     num_tiles(arr::TileArray{T, N}, axis::Integer, shape::NTuple{M, Int}) -> Int32
 
 Get the number of tiles along a specific axis of an array, given the tile shape.
-This is equivalent to cdiv(arr.sizes[axis+1], shape[axis+1]).
+This is equivalent to cdiv(arr.sizes[axis], shape[axis]).
 
 # Arguments
 - `arr`: The array to query
-- `axis`: The axis (0-indexed) to count tiles along
+- `axis`: The axis (1-indexed) to count tiles along
 - `shape`: The tile shape used for partitioning
 
 # Example
 ```julia
 # For a 1024x768 matrix with 32x32 tiles:
-# num_tiles(arr, 0, (32, 32)) returns cdiv(1024, 32) = 32
-# num_tiles(arr, 1, (32, 32)) returns cdiv(768, 32) = 24
+# num_tiles(arr, 1, (32, 32)) returns cdiv(1024, 32) = 32
+# num_tiles(arr, 2, (32, 32)) returns cdiv(768, 32) = 24
 ```
 """
 # Return type annotation needed here because inferencebarrier returns Any
-@noinline function num_tiles(arr::TileArray{T, N}, axis::Integer, shape::NTuple{M, Int})::Int32 where {T, N, M}
+@noinline function _num_tiles(arr::TileArray{T, N}, axis::Integer, shape::NTuple{M, Int})::Int32 where {T, N, M}
     Base.inferencebarrier(zero(Int32))
+end
+@inline function num_tiles(arr::TileArray{T, N}, axis::Integer, shape::NTuple{M, Int})::Int32 where {T, N, M}
+    _num_tiles(arr, axis - 1, shape)
 end
 
 #=============================================================================
@@ -771,24 +794,28 @@ Returns a tile with the specified dimension removed.
 
 # Arguments
 - `tile`: Input tile to reduce
-- `axis`: Axis to reduce along (0-indexed). Must be a compile-time constant.
+- `axis`: Axis to reduce along (1-indexed). Must be a compile-time constant.
 
 # Example
 ```julia
-# For a (128, 64) tile, reducing along axis 1:
-sums = ct.reduce_sum(tile, 1)  # Returns (128,) tile
+# For a (128, 64) tile, reducing along axis 2:
+sums = ct.reduce_sum(tile, 2)  # Returns (128,) tile
 ```
 """
-@inline function reduce_sum(tile::Tile{T, S}, axis::Integer) where {T <: AbstractFloat, S}
-    # Forward to Val-based version for type stability
-    reduce_sum(tile, Val(axis))
-end
-
-@noinline function reduce_sum(tile::Tile{T, S}, ::Val{axis}) where {T <: AbstractFloat, S, axis}
+# Internal function - receives 0-indexed axis (for compiler)
+@noinline function _reduce_sum(tile::Tile{T, S}, ::Val{axis}) where {T <: AbstractFloat, S, axis}
     # Compute the reduced shape by removing the reduced dimension
     reduced_shape = ntuple(i -> S[i < axis + 1 ? i : i + 1], length(S) - 1)
     Base.donotdelete(tile)
     Tile{T, reduced_shape}()
+end
+
+# Public API - both forms accept 1-indexed axis
+@inline function reduce_sum(tile::Tile{T, S}, axis::Integer) where {T <: AbstractFloat, S}
+    _reduce_sum(tile, Val(axis - 1))
+end
+@inline function reduce_sum(tile::Tile{T, S}, ::Val{axis}) where {T <: AbstractFloat, S, axis}
+    _reduce_sum(tile, Val(axis - 1))
 end
 
 """
@@ -798,16 +825,21 @@ Maximum reduction along the specified axis.
 
 # Arguments
 - `tile`: Input tile to reduce
-- `axis`: Axis to reduce along (0-indexed). Must be a compile-time constant.
+- `axis`: Axis to reduce along (1-indexed). Must be a compile-time constant.
 """
-@inline function reduce_max(tile::Tile{T, S}, axis::Integer) where {T <: AbstractFloat, S}
-    reduce_max(tile, Val(axis))
-end
-
-@noinline function reduce_max(tile::Tile{T, S}, ::Val{axis}) where {T <: AbstractFloat, S, axis}
+# Internal function - receives 0-indexed axis (for compiler)
+@noinline function _reduce_max(tile::Tile{T, S}, ::Val{axis}) where {T <: AbstractFloat, S, axis}
     reduced_shape = ntuple(i -> S[i < axis + 1 ? i : i + 1], length(S) - 1)
     Base.donotdelete(tile)
     Tile{T, reduced_shape}()
+end
+
+# Public API - both forms accept 1-indexed axis
+@inline function reduce_max(tile::Tile{T, S}, axis::Integer) where {T <: AbstractFloat, S}
+    _reduce_max(tile, Val(axis - 1))
+end
+@inline function reduce_max(tile::Tile{T, S}, ::Val{axis}) where {T <: AbstractFloat, S, axis}
+    _reduce_max(tile, Val(axis - 1))
 end
 
 #=============================================================================
