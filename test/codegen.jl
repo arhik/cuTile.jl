@@ -824,6 +824,22 @@
                 end
             end
 
+            # 4D (requires TileArray with explicit sizes since grid only provides 3D)
+            spec4d = ct.ArraySpec{4}(16, true)
+            @test @filecheck begin
+                @check_label "entry"
+                code_tiled(Tuple{ct.TileArray{Float32,4,spec4d}, ct.TileArray{Float32,4,spec4d}}) do a, b
+                    bidx = ct.bid(1)
+                    bidy = ct.bid(2)
+                    bidz = ct.bid(3)
+                    @check "load_view_tko"
+                    tile = ct.load(a, (bidx, bidy, bidz, 1), (2, 4, 4, 4))
+                    @check "store_view_tko"
+                    ct.store(b, (bidx, bidy, bidz, 1), tile)
+                    return
+                end
+            end
+
             # with padding_mode
             @test @filecheck begin
                 @check_label "entry"

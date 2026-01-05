@@ -439,22 +439,10 @@ end
     _load(arr, Val(shape), padding_mode, index - one(index))
 end
 
-# Load with Constant shape tuple (1D) - extracts value from Constant type parameter
-@inline function load(arr::TileArray{T, N}, index, shape::Tuple{Constant{Int, V}};
-                      padding_mode::Int=PaddingMode.Undetermined) where {T, N, V}
-    _load(arr, Val((V,)), padding_mode, _sub1(index)...)
-end
-
-# Load with Constant shape tuple (2D)
-@inline function load(arr::TileArray{T, N}, index, shape::Tuple{Constant{Int, V1}, Constant{Int, V2}};
-                      padding_mode::Int=PaddingMode.Undetermined) where {T, N, V1, V2}
-    _load(arr, Val((V1, V2)), padding_mode, _sub1(index)...)
-end
-
-# Load with Constant shape tuple (3D)
-@inline function load(arr::TileArray{T, N}, index, shape::Tuple{Constant{Int, V1}, Constant{Int, V2}, Constant{Int, V3}};
-                      padding_mode::Int=PaddingMode.Undetermined) where {T, N, V1, V2, V3}
-    _load(arr, Val((V1, V2, V3)), padding_mode, _sub1(index)...)
+# Load with Constant shape tuple (any dimension) - extracts values from Constant type parameters
+@inline function load(arr::TileArray{T, N}, index, shape::Tuple{Vararg{Constant{Int}}};
+                      padding_mode::Int=PaddingMode.Undetermined) where {T, N}
+    _load(arr, Val(_extract_shape(shape)), padding_mode, _sub1(index)...)
 end
 
 # Keyword argument version for ct.load(arr; index=..., shape=..., padding_mode=...)
@@ -466,9 +454,10 @@ end
 
 # Helper to extract compile-time shape from various tuple types
 @inline _extract_shape(s::NTuple{N, Int}) where N = s
-@inline _extract_shape(s::Tuple{Constant{Int, V}}) where V = (V,)
-@inline _extract_shape(s::Tuple{Constant{Int, V1}, Constant{Int, V2}}) where {V1, V2} = (V1, V2)
-@inline _extract_shape(s::Tuple{Constant{Int, V1}, Constant{Int, V2}, Constant{Int, V3}}) where {V1, V2, V3} = (V1, V2, V3)
+# Recursive extraction for Constant tuples
+@inline _extract_shape(s::Tuple{Constant{Int, V}, Vararg{Constant{Int}}}) where V =
+    (V, _extract_shape(Base.tail(s))...)
+@inline _extract_shape(::Tuple{}) = ()
 
 """
     store(arr::TileArray, index, tile::Tile) -> Nothing

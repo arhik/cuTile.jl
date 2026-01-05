@@ -87,6 +87,33 @@ end
     @test Array(c) ≈ Array(a) + Array(b)
 end
 
+@testset "4D tensor add" begin
+    # 4D loads require TileArray with explicit sizes (grid only provides 3D)
+    function tadd_4d(a::ct.TileArray{Float32,4}, b::ct.TileArray{Float32,4},
+                     c::ct.TileArray{Float32,4})
+        bidx = ct.bid(1)
+        bidy = ct.bid(2)
+        bidz = ct.bid(3)
+        # Load 4D tiles - 4th dimension index is fixed at 1
+        tile_a = ct.load(a, (bidx, bidy, bidz, 1), (4, 4, 4, 2))
+        tile_b = ct.load(b, (bidx, bidy, bidz, 1), (4, 4, 4, 2))
+        ct.store(c, (bidx, bidy, bidz, 1), tile_a + tile_b)
+        return
+    end
+
+    # Array shape: (d1, d2, d3, d4) with tile shape (4, 4, 4, 2)
+    d1, d2, d3, d4 = 16, 16, 8, 2
+    tile_1, tile_2, tile_3, tile_4 = 4, 4, 4, 2
+    a = CUDA.rand(Float32, d1, d2, d3, d4)
+    b = CUDA.rand(Float32, d1, d2, d3, d4)
+    c = CUDA.zeros(Float32, d1, d2, d3, d4)
+
+    grid = (cld(d1, tile_1), cld(d2, tile_2), cld(d3, tile_3))
+    ct.launch(tadd_4d, grid, a, b, c)
+
+    @test Array(c) ≈ Array(a) + Array(b)
+end
+
 @testset "transpose" begin
     function transpose_kernel(x::ct.TileArray{Float32,2}, y::ct.TileArray{Float32,2})
         bidx = ct.bid(1)

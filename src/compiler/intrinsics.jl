@@ -1024,6 +1024,9 @@ function get_size_stride_vals(ctx::CodegenContext, arg_idx, is_tilearray::Bool, 
 
     # Compute from grid if not available
     if isempty(size_vals)
+        if ndim > 3
+            error("4D+ tile operations require TileArray with explicit sizes (grid only provides 3D)")
+        end
         nb_x, nb_y, nb_z = encode_GetNumTileBlocksOp!(cb, scalar_i32, scalar_i32, scalar_i32)
         grid_sizes = [nb_x, nb_y, nb_z]
 
