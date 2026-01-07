@@ -3,8 +3,6 @@
 
 @eval Intrinsics begin
     # Scalar type conversions
-    # NOTE: These must perform actual computation via Core.Intrinsics because
-    # overlay methods can execute during constant propagation (Julia bug #47349).
     @noinline function itof(x::Integer, ::Type{F}, s::Signedness) where {F<:AbstractFloat}
         s === SignednessSigned ? Core.Intrinsics.sitofp(F, x) : Core.Intrinsics.uitofp(F, x)
     end

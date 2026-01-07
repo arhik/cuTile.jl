@@ -34,8 +34,6 @@
 ## cuda_tile.maxf
 
 @eval Intrinsics begin
-    # NOTE: Must perform actual computation because overlay methods can execute
-    # during constant propagation (Julia bug #47349).
     @noinline maxf(x::T, y::T) where {T<:AbstractFloat} = ifelse(x > y || isnan(x), x, y)
     @noinline maxf(a::Tile{T, S}, b::Tile{T, S}) where {T<:AbstractFloat, S} = (Base.donotdelete(a, b); Tile{T, S}())
 end
@@ -48,8 +46,6 @@ end
 ## cuda_tile.minf
 
 @eval Intrinsics begin
-    # NOTE: Must perform actual computation because overlay methods can execute
-    # during constant propagation (Julia bug #47349).
     @noinline minf(x::T, y::T) where {T<:AbstractFloat} = ifelse(x < y || isnan(x), x, y)
     @noinline minf(a::Tile{T, S}, b::Tile{T, S}) where {T<:AbstractFloat, S} = (Base.donotdelete(a, b); Tile{T, S}())
 end

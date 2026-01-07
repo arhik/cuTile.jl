@@ -54,8 +54,8 @@ CC.method_table(interp::cuTileInterpreter) = interp.method_table
 CC.lock_mi_inference(::cuTileInterpreter, ::MethodInstance) = nothing
 CC.unlock_mi_inference(::cuTileInterpreter, ::MethodInstance) = nothing
 
-# Cache owner - we don't cache results to the global cache
-CC.cache_owner(::cuTileInterpreter) = nothing
+# Cache owner - use a unique identifier to cache inference results separately
+CC.cache_owner(::cuTileInterpreter) = :cutile
 
 # Optimization flags
 CC.may_optimize(::cuTileInterpreter) = true
