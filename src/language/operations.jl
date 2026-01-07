@@ -170,14 +170,17 @@ tile = ct.gather(arr, indices)
     # Convert to 0-indexed
     indices_0 = indices .- one(I)
 
-    # Compute pointer tile
-    ptr_tile = Intrinsics.offset(array.ptr, indices_0)
+    # Convert to Int32 for consistency with array.sizes
+    indices_i32 = astype(indices_0, Int32)
 
-    # Bounds mask: 0 <= indices_0 < size
-    zero_0d = Tile(zero(I))
-    size_0d = Tile(array.sizes[1])
-    ge_zero = indices_0 >= zero_0d
-    lt_size = indices_0 < size_0d
+    # Compute pointer tile
+    ptr_tile = Intrinsics.offset(array.ptr, indices_i32)
+
+    # Bounds mask: 0 <= indices_i32 < size
+    zero_0d = Tile(Int32(0))
+    size_0d = Tile(array.sizes[1])  # Already Int32
+    ge_zero = indices_i32 >= zero_0d
+    lt_size = indices_i32 < size_0d
     mask = ge_zero & lt_size
 
     # Padding for OOB (zero)
@@ -251,14 +254,17 @@ ct.scatter(arr, indices, result_tile)
     # Convert to 0-indexed
     indices_0 = indices .- one(I)
 
-    # Compute pointer tile
-    ptr_tile = Intrinsics.offset(array.ptr, indices_0)
+    # Convert to Int32 for consistency with array.sizes
+    indices_i32 = astype(indices_0, Int32)
 
-    # Bounds mask: 0 <= indices_0 < size
-    zero_0d = Tile(zero(I))
-    size_0d = Tile(array.sizes[1])
-    ge_zero = indices_0 >= zero_0d
-    lt_size = indices_0 < size_0d
+    # Compute pointer tile
+    ptr_tile = Intrinsics.offset(array.ptr, indices_i32)
+
+    # Bounds mask: 0 <= indices_i32 < size
+    zero_0d = Tile(Int32(0))
+    size_0d = Tile(array.sizes[1])  # Already Int32
+    ge_zero = indices_i32 >= zero_0d
+    lt_size = indices_i32 < size_0d
     mask = ge_zero & lt_size
 
     Intrinsics.store_ptr_tko(ptr_tile, tile, mask)

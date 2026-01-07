@@ -1344,6 +1344,44 @@ end
                 end
             end
         end
+
+        @testset "1D gather with Int indices" begin
+            @test @filecheck begin
+                @check_label "entry"
+                code_tiled(Tuple{ct.TileArray{Float32,1,spec}, ct.TileArray{Float32,1,spec}}) do a, b
+                    pid = ct.bid(1)
+                    # Use Int (Int64) to test type conversion
+                    @check "iota"
+                    indices = ct.arange((16,), Int)
+                    # Should convert to Int32 internally
+                    @check "trunci"
+                    @check "offset"
+                    @check "load_ptr_tko"
+                    tile = ct.gather(a, indices)
+                    ct.store(b, pid, tile)
+                    return
+                end
+            end
+        end
+
+        @testset "1D scatter with Int indices" begin
+            @test @filecheck begin
+                @check_label "entry"
+                code_tiled(Tuple{ct.TileArray{Float32,1,spec}, ct.TileArray{Float32,1,spec}}) do a, b
+                    pid = ct.bid(1)
+                    tile = ct.load(a, pid, (16,))
+                    # Use Int (Int64) to test type conversion
+                    @check "iota"
+                    indices = ct.arange((16,), Int)
+                    # Should convert to Int32 internally
+                    @check "trunci"
+                    @check "offset"
+                    @check "store_ptr_tko"
+                    ct.scatter(b, indices, tile)
+                    return
+                end
+            end
+        end
     end
 
     #=========================================================================
