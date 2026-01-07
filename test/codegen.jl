@@ -212,6 +212,21 @@
             end
         end
 
+        @testset "mixed-type integer comparison" begin
+            @test @filecheck begin
+                @check_label "entry"
+                code_tiled(Tuple{}) do
+                    a = ct.arange((16,), Int64)
+                    b = ct.arange((16,), Int32)
+                    # Should promote Int32 to Int64 and compare
+                    @check "exti"
+                    @check "cmpi"
+                    result = a .< b
+                    return
+                end
+            end
+        end
+
         @testset "constant" begin
             @test @filecheck begin
                 @check_label "entry"

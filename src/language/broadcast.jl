@@ -115,6 +115,12 @@ Base.Broadcast.broadcastable(t::Tile) = t
 @inline Base.Broadcast.broadcasted(::TileStyle, ::typeof(!=), a::Tile{T,S1}, b::Tile{T,S2}) where {T,S1,S2} =
     a != b
 
+# Mixed-type integer comparisons (delegate to Base overloads which handle promotion)
+for op in (:<, :>, :<=, :>=, :(==), :(!=))
+    @eval @inline Base.Broadcast.broadcasted(::TileStyle, ::typeof($op), a::Tile{T1,S1}, b::Tile{T2,S2}) where {T1<:Integer,T2<:Integer,S1,S2} =
+        $op(a, b)
+end
+
 # Tile-Scalar comparisons (convert scalar to 0D tile, then broadcast)
 @inline Base.Broadcast.broadcasted(::TileStyle, ::typeof(<), a::Tile{T,S}, b::Number) where {T,S} =
     a < Tile(T(b))

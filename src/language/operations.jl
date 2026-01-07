@@ -770,6 +770,17 @@ end
 @inline Base.:(!=)(a::Tile{T, S1}, b::Tile{T, S2}) where {T, S1, S2} =
     broadcast_to(a, broadcast_shape(S1, S2)) != broadcast_to(b, broadcast_shape(S1, S2))
 
+# Mixed-type integer comparisons - promote to common type
+# Helper to compute result type at compile time via dispatch
+@inline _promote_cmp(op, a::Tile{T1, S1}, b::Tile{T2, S2}, ::Type{T}, ::Val{S}) where {T1, T2, S1, S2, T, S} =
+    op(astype(broadcast_to(a, S), T), astype(broadcast_to(b, S), T))
+
+for op in (:<, :>, :<=, :>=, :(==), :(!=))
+    @eval @inline function Base.$op(a::Tile{T1, S1}, b::Tile{T2, S2}) where {T1<:Integer, T2<:Integer, S1, S2}
+        _promote_cmp($op, a, b, promote_type(T1, T2), Val(broadcast_shape(S1, S2)))
+    end
+end
+
 #=============================================================================
  Logical Operations
 =============================================================================#
