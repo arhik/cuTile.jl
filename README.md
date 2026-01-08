@@ -96,14 +96,15 @@ Benchmarks comparing cuTile.jl against cuTile Python on an RTX 5080:
 
 | Kernel | Julia | Python | Status |
 |--------|-------|--------|--------|
-| Vector Addition | 793 GB/s | 817 GB/s | OK (-3%) |
-| Matrix Transpose | 688 GB/s | 747 GB/s | OK (-8%) |
-| Matrix Multiplication | 27.4 TFLOPS | 25.8 TFLOPS | OK (+6%) |
-| Layer Normalization | 184 GB/s | 455 GB/s | https://github.com/JuliaGPU/cuTile.jl/issues/1 (-60%) |
+| Vector Addition | 813 GB/s | 834 GB/s | OK (-3%) |
+| Matrix Transpose | 769 GB/s | 795 GB/s | OK (-3%) |
+| Matrix Multiplication | 48.3 TFLOPS | 48.6 TFLOPS | OK (=) |
+| Layer Normalization | 254 GB/s | 683 GB/s | https://github.com/JuliaGPU/cuTile.jl/issues/1 (-63%) |
+| Batch Matrix Multiply | 31.7 TFLOPS | 31.6 TFLOPS | OK (=) |
 
-Simple kernels (vadd, transpose, matmul) perform within ~10% of Python. Kernels with
-multiple loops containing multiple loads per iteration (like layernorm) are currently
-slower due to conservative token threading in the compiler (see https://github.com/JuliaGPU/cuTile.jl/issues/1).
+Compute-intensive kernels (matmul, batch matmul) perform identically to Python. Memory-bound
+kernels (vadd, transpose) are within ~3% of Python. The layernorm kernel is slower due to
+conservative token threading in the compiler (see https://github.com/JuliaGPU/cuTile.jl/issues/1).
 
 
 ## Supported Operations

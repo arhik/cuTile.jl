@@ -18,18 +18,18 @@ from math import ceil
 NRUNS = 10
 WARMUP = 3
 
-# Data sizes (must match Julia benchmarks)
-VADD_SIZE = 2**25           # 134 MB
-TRANSPOSE_DIM = 4096        # 4096x4096 = 67 MB
-MATMUL_DIM = 2048           # 2048x2048x2048
+# Data sizes - large enough to saturate GPU and minimize launch overhead
+VADD_SIZE = 2**27           # 512 MB (128M elements)
+TRANSPOSE_DIM = 8192        # 8192x8192 = 268 MB
+MATMUL_DIM = 4096           # 4096x4096x4096
 
 # Tile sizes
 VADD_TILE = 1024
 TRANSPOSE_TILE_M = 64
 TRANSPOSE_TILE_N = 64
-MATMUL_TM = 32
-MATMUL_TN = 32
-MATMUL_TK = 32
+MATMUL_TM = 64
+MATMUL_TN = 64
+MATMUL_TK = 64
 
 #=============================================================================
 # Benchmark Utilities
@@ -371,10 +371,19 @@ def benchmark_matmul():
 # Layer Normalization
 #=============================================================================
 
-LAYERNORM_M = 1024
-LAYERNORM_N = 2048
+LAYERNORM_M = 4096
+LAYERNORM_N = 4096
 LAYERNORM_TILE_N = 1024
 LAYERNORM_EPS = 1e-5
+
+# Batch matmul sizes
+BATCHMATMUL_BATCH = 8
+BATCHMATMUL_M = 1024
+BATCHMATMUL_K = 512
+BATCHMATMUL_N = 2048
+BATCHMATMUL_TM = 128
+BATCHMATMUL_TN = 256
+BATCHMATMUL_TK = 64
 
 
 @ct.kernel
@@ -479,6 +488,91 @@ def benchmark_layernorm():
 
 
 #=============================================================================
+# Batch Matrix Multiplication
+#=============================================================================
+
+@ct.kernel
+def batchmatmul_cutile_kernel(A, B, C, tm: ct.Constant[int], tn: ct.Constant[int], tk: ct.Constant[int]):
+    """CuTile kernel for batch matrix multiplication
+    A has shape (Batch, M, K), B has shape (Batch, K, N) and C has shape (Batch, M, N)
+    Grid: (Batch, M_tiles, N_tiles)
+    """
+    pid_batch = ct.bid(0)
+    bidx = ct.bid(1)
+    bidy = ct.bid(2)
+
+    num_k_tiles = ct.cdiv(A.shape[2], tk)
+    accumulator = ct.full((tm, tn), 0.0, dtype=ct.float32)
+    zero_pad = ct.PaddingMode.ZERO
+
+    for k in range(num_k_tiles):
+        a = ct.load(A, index=(pid_batch, bidx, k), shape=(1, tm, tk), padding_mode=zero_pad)
+        a = ct.reshape(a, (tm, tk))
+
+        b = ct.load(B, index=(pid_batch, k, bidy), shape=(1, tk, tn), padding_mode=zero_pad)
+        b = ct.reshape(b, (tk, tn))
+
+        accumulator = ct.mma(a, b, acc=accumulator)
+
+    result = ct.astype(accumulator, C.dtype)
+    result_3d = ct.reshape(result, (1, tm, tn))
+    ct.store(C, index=(pid_batch, bidx, bidy), tile=result_3d)
+
+
+def benchmark_batchmatmul():
+    print("\nBenchmarking Batch Matrix Multiplication...")
+    Batch, M, K, N = BATCHMATMUL_BATCH, BATCHMATMUL_M, BATCHMATMUL_K, BATCHMATMUL_N
+    print(f"  Size: ({Batch} x {M} x {K}) @ ({Batch} x {K} x {N}), Float16")
+
+    # PyTorch tensors
+    A_torch = torch.randn(Batch, M, K, dtype=torch.float16, device='cuda')
+    B_torch = torch.randn(Batch, K, N, dtype=torch.float16, device='cuda')
+    C_torch = torch.zeros(Batch, M, N, dtype=torch.float16, device='cuda')
+
+    # CuPy arrays (from same data)
+    A_cp = cp.asarray(A_torch)
+    B_cp = cp.asarray(B_torch)
+    C_cp = cp.zeros((Batch, M, N), dtype=np.float16)
+
+    # Reference result (PyTorch bmm in fp32 for accuracy)
+    C_ref = torch.bmm(A_torch.float(), B_torch.float()).cpu().numpy()
+
+    results = []
+    flops = 2.0 * Batch * M * N * K
+
+    # PyTorch bmm
+    def torch_bmm():
+        torch.bmm(A_torch, B_torch, out=C_torch)
+
+    torch_bmm()
+    torch.cuda.synchronize()
+    assert np.allclose(C_torch.float().cpu().numpy(), C_ref, rtol=1e-1, atol=1e-1), "PyTorch incorrect!"
+    min_t, mean_t = benchmark_torch(torch_bmm)
+    results.append(BenchmarkResult("PyTorch bmm", min_t, mean_t))
+
+    # cuTile
+    C_cp.fill(0)
+    grid = (Batch, ceil(M / BATCHMATMUL_TM), ceil(N / BATCHMATMUL_TN))
+    stream = cp.cuda.get_current_stream()
+
+    def cutile_bmm():
+        ct.launch(stream, grid, batchmatmul_cutile_kernel,
+                  (A_cp, B_cp, C_cp, BATCHMATMUL_TM, BATCHMATMUL_TN, BATCHMATMUL_TK))
+
+    cutile_bmm()
+    cp.cuda.runtime.deviceSynchronize()
+    assert np.allclose(cp.asnumpy(C_cp).astype(np.float32), C_ref, rtol=1e-1, atol=1e-1), "cuTile incorrect!"
+    min_t, mean_t = benchmark_cupy(cutile_bmm)
+    results.append(BenchmarkResult("cuTile Python", min_t, mean_t))
+
+    # Calculate TFLOPS
+    tflops_vals = [f"{flops / (r.min_ms * 1e-3) / 1e12:.2f} TFLOPS" for r in results]
+
+    print_table("Batch Matrix Multiplication (Float16)", results, extra_col=("Performance", tflops_vals))
+    return results
+
+
+#=============================================================================
 # Main
 #=============================================================================
 
@@ -496,6 +590,7 @@ def main():
     transpose_results = benchmark_transpose()
     matmul_results = benchmark_matmul()
     layernorm_results = benchmark_layernorm()
+    batchmatmul_results = benchmark_batchmatmul()
 
     print()
     print("=" * 60)
