@@ -12,7 +12,7 @@ Interfaces and APIs may change without notice.
 cuTile.jl has not been registered, and depends on several unregistered packages, so you
 have to clone the repository and activate the environment within:
 
-```bash
+```
 $ git clone https://github.com/JuliaGPU/cuTile.jl
 $ julia --project=cuTile.jl
 julia> using Pkg
@@ -64,7 +64,7 @@ ct.code_tiled(vadd, Tuple{ct.TileArray{Float32, 1, ct.ArraySpec{1}(128, true, (0
                           ct.Constant{Int64, 16}})
 ```
 
-Since these types can be verbosed, and are derived from the runtime properties
+Since these types can be verbose, and are derived from the runtime properties
 of arrays, it's often easier to use the `@code_tiled` macro instead:
 
 ```julia-repl
@@ -99,7 +99,7 @@ Benchmarks comparing cuTile.jl against cuTile Python on an RTX 5080:
 | Vector Addition | 793 GB/s | 817 GB/s | OK (-3%) |
 | Matrix Transpose | 688 GB/s | 747 GB/s | OK (-8%) |
 | Matrix Multiplication | 27.4 TFLOPS | 25.8 TFLOPS | OK (+6%) |
-| Layer Normalization | 184 GB/s | 455 GB/s | [Known issue](https://github.com/JuliaGPU/cuTile.jl/issues/1) (-60%) |
+| Layer Normalization | 184 GB/s | 455 GB/s | https://github.com/JuliaGPU/cuTile.jl/issues/1 (-60%) |
 
 Simple kernels (vadd, transpose, matmul) perform within ~10% of Python. Kernels with
 multiple loops containing multiple loads per iteration (like layernorm) are currently
@@ -228,6 +228,8 @@ end
 ```
 
 ### Launch Syntax
+
+cuTile.jl implicitly uses the current task-bound stream from CUDA.jl:
 
 ```python
 # Python
