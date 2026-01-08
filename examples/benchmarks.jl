@@ -16,18 +16,18 @@ import cuTile as ct
 const NRUNS = 10
 const WARMUP = 3
 
-# Data sizes (must match Python benchmarks)
-const VADD_SIZE = 2^25           # 134 MB
-const TRANSPOSE_DIM = 4096       # 4096x4096 = 67 MB
-const MATMUL_DIM = 2048          # 2048x2048x2048
+# Data sizes - large enough to saturate GPU and minimize launch overhead
+const VADD_SIZE = 2^27           # 512 MB (128M elements)
+const TRANSPOSE_DIM = 8192       # 8192x8192 = 268 MB
+const MATMUL_DIM = 4096          # 4096x4096x4096
 
 # Tile sizes
 const VADD_TILE = 1024
 const TRANSPOSE_TILE_M = 64
 const TRANSPOSE_TILE_N = 64
-const MATMUL_TM = 32
-const MATMUL_TN = 32
-const MATMUL_TK = 32
+const MATMUL_TM = 64
+const MATMUL_TN = 64
+const MATMUL_TK = 64
 
 #=============================================================================
  Benchmark Utilities
@@ -361,10 +361,19 @@ end
  Layer Normalization
 =============================================================================#
 
-const LAYERNORM_M = 1024
-const LAYERNORM_N = 2048
+const LAYERNORM_M = 4096
+const LAYERNORM_N = 4096
 const LAYERNORM_TILE_N = 1024
 const LAYERNORM_EPS = 1f-5
+
+# Batch matmul sizes
+const BATCHMATMUL_BATCH = 8
+const BATCHMATMUL_M = 1024
+const BATCHMATMUL_K = 512
+const BATCHMATMUL_N = 2048
+const BATCHMATMUL_TM = 128
+const BATCHMATMUL_TN = 256
+const BATCHMATMUL_TK = 64
 
 # SIMT naive kernel (2-pass: compute mean/var, then normalize)
 function layernorm_simt_kernel!(X, W, B, Y, Mean, Rstd, N, eps)
@@ -498,6 +507,103 @@ function benchmark_layernorm()
 end
 
 #=============================================================================
+ Batch Matrix Multiplication
+=============================================================================#
+
+# Batch matmul kernel (3D arrays with batch-last ordering)
+# A: (M, K, Batch), B: (K, N, Batch), C: (M, N, Batch)
+function batchmatmul_cutile_kernel(A::ct.TileArray{T,3}, B::ct.TileArray{T,3}, C::ct.TileArray{T,3},
+                                   tm::ct.Constant{Int}, tn::ct.Constant{Int},
+                                   tk::ct.Constant{Int}) where {T}
+    bid_m = ct.bid(1)
+    bid_n = ct.bid(2)
+    pid_batch = ct.bid(3)
+
+    K = A.sizes[2]
+    num_k = ct.cdiv(K, Int32(tk[]))
+
+    acc = ct.full((tm[], tn[]), zero(Float32), Float32)
+
+    k = Int32(1)
+    while k <= num_k
+        a = ct.load(A, (bid_m, k, pid_batch), (tm[], tk[], 1);
+                    padding_mode=ct.PaddingMode.Zero)
+        b = ct.load(B, (k, bid_n, pid_batch), (tk[], tn[], 1);
+                    padding_mode=ct.PaddingMode.Zero)
+
+        a_2d = ct.reshape(a, (tm[], tk[]))
+        b_2d = ct.reshape(b, (tk[], tn[]))
+
+        if T === Float32
+            a_2d = convert(ct.Tile{ct.TFloat32}, a_2d)
+            b_2d = convert(ct.Tile{ct.TFloat32}, b_2d)
+        end
+
+        acc = ct.mma(a_2d, b_2d, acc)
+        k += Int32(1)
+    end
+
+    result = convert(ct.Tile{T}, acc)
+    result_3d = ct.reshape(result, (tm[], tn[], 1))
+    ct.store(C, (bid_m, bid_n, pid_batch), result_3d)
+
+    return nothing
+end
+
+function benchmark_batchmatmul()
+    println("\nBenchmarking Batch Matrix Multiplication...")
+    Batch, M, K, N = BATCHMATMUL_BATCH, BATCHMATMUL_M, BATCHMATMUL_K, BATCHMATMUL_N
+    println("  Size: ($M x $K x $Batch) @ ($K x $N x $Batch), Float16")
+
+    # Batch-last ordering for optimal column-major access
+    A = CUDA.rand(Float16, M, K, Batch)
+    B = CUDA.rand(Float16, K, N, Batch)
+    C = CUDA.zeros(Float16, M, N, Batch)
+
+    # Reference result (batched matmul on CPU)
+    A_cpu = Float32.(Array(A))
+    B_cpu = Float32.(Array(B))
+    C_ref = zeros(Float32, M, N, Batch)
+    for b in 1:Batch
+        C_ref[:, :, b] = A_cpu[:, :, b] * B_cpu[:, :, b]
+    end
+
+    results = BenchmarkResult[]
+    flops = 2.0 * Batch * M * N * K
+
+    # cuBLAS batched gemm (via loop)
+    fill!(C, 0)
+    cublas_f = () -> begin
+        for b in 1:Batch
+            mul!(view(C, :, :, b), view(A, :, :, b), view(B, :, :, b))
+        end
+    end
+    cublas_f()
+    CUDA.synchronize()
+    @assert isapprox(Float32.(Array(C)), C_ref, rtol=1e-1, atol=1e-1) "cuBLAS incorrect!"
+    min_t, mean_t = benchmark_kernel(cublas_f)
+    push!(results, BenchmarkResult("cuBLAS (loop)", min_t, mean_t))
+
+    # cuTile
+    fill!(C, 0)
+    grid = (cld(M, BATCHMATMUL_TM), cld(N, BATCHMATMUL_TN), Batch)
+    cutile_f = () -> ct.launch(batchmatmul_cutile_kernel, grid, A, B, C,
+                               ct.Constant(BATCHMATMUL_TM), ct.Constant(BATCHMATMUL_TN),
+                               ct.Constant(BATCHMATMUL_TK))
+    cutile_f()
+    CUDA.synchronize()
+    @assert isapprox(Float32.(Array(C)), C_ref, rtol=1e-1, atol=1e-1) "cuTile incorrect!"
+    min_t, mean_t = benchmark_kernel(cutile_f)
+    push!(results, BenchmarkResult("cuTile.jl", min_t, mean_t))
+
+    # Calculate TFLOPS
+    tflops_vals = [string(round(flops / (r.min_ms * 1e-3) / 1e12, digits=2), " TFLOPS") for r in results]
+
+    print_table("Batch Matrix Multiplication (Float16)", results; extra_col=("Performance", tflops_vals))
+    return results
+end
+
+#=============================================================================
  Main
 =============================================================================#
 
@@ -515,6 +621,7 @@ function main()
     transpose_results = benchmark_transpose()
     matmul_results = benchmark_matmul()
     layernorm_results = benchmark_layernorm()
+    batchmatmul_results = benchmark_batchmatmul()
 
     println()
     println("=" ^ 60)
