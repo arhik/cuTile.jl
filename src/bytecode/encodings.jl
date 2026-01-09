@@ -1736,7 +1736,7 @@ function encode_ScanOp!(body::Function, cb::CodeBuilder,
 
     # Attributes: dim (int), reverse (bool), identities (array)
     encode_opattr_int!(cb, dim)
-    push!(cb.buf, reverse ? 0x01 : 0x00)
+    encode_opattr_bool!(cb, reverse)
     encode_scan_identity_array!(cb, identities)
 
     # Variadic operands
