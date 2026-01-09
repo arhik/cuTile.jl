@@ -93,7 +93,7 @@ end
 
 # cuda_tile.cldi (ceiling division, toward positive infinity)
 @eval Intrinsics begin
-    @noinline cldi(x::T, y::T, s::Signedness) where {T<:Integer} = Base.cld(x, y)
+    @noinline cldi(x::T, y::T, s::Signedness) where {T<:Integer} = (donotdelete(x, y, s); compilerbarrier(:const, zero(T)))
 end
 function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.cldi), args)
     signedness = @something get_constant(ctx, args[3]) error("cldi requires compile-time signedness")
@@ -157,7 +157,7 @@ end
 
 # cuda_tile.fldi (floor division, toward negative infinity)
 @eval Intrinsics begin
-    @noinline fldi(x::T, y::T, s::Signedness) where {T<:Integer} = Base.fld(x, y)
+    @noinline fldi(x::T, y::T, s::Signedness) where {T<:Integer} = (donotdelete(x, y, s); compilerbarrier(:const, zero(T)))
 end
 function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.fldi), args)
     signedness = @something get_constant(ctx, args[3]) error("fldi requires compile-time signedness")

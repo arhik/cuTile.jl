@@ -842,11 +842,11 @@ end
     @test Array(b) ≈ Array(a) ./ 4.0f0 rtol=1e-5
 end
 
-@testset "scalar / tile" begin
+@testset "scalar ./ tile" begin
     function scalar_div_tile_kernel(a::ct.TileArray{Float32,1}, b::ct.TileArray{Float32,1})
         pid = ct.bid(1)
         tile = ct.load(a, pid, (16,))
-        result = 1.0f0 / tile
+        result = 1.0f0 ./ tile
         ct.store(b, pid, result)
         return
     end
@@ -861,11 +861,11 @@ end
     @test Array(b) ≈ 1.0f0 ./ Array(a) rtol=1e-5
 end
 
-@testset "tile + scalar" begin
+@testset "tile .+ scalar" begin
     function add_scalar(a::ct.TileArray{Float32,1}, b::ct.TileArray{Float32,1})
         pid = ct.bid(1)
         tile = ct.load(a, pid, (16,))
-        result = tile + 3.5f0
+        result = tile .+ 3.5f0
         ct.store(b, pid, result)
         return
     end
@@ -880,11 +880,11 @@ end
     @test Array(b) ≈ Array(a) .+ 3.5f0 rtol=1e-5
 end
 
-@testset "scalar + tile" begin
+@testset "scalar .+ tile" begin
     function scalar_add_tile_kernel(a::ct.TileArray{Float32,1}, b::ct.TileArray{Float32,1})
         pid = ct.bid(1)
         tile = ct.load(a, pid, (16,))
-        result = 2.5f0 + tile
+        result = 2.5f0 .+ tile
         ct.store(b, pid, result)
         return
     end
@@ -899,11 +899,11 @@ end
     @test Array(b) ≈ 2.5f0 .+ Array(a) rtol=1e-5
 end
 
-@testset "tile - scalar" begin
+@testset "tile .- scalar" begin
     function sub_scalar(a::ct.TileArray{Float32,1}, b::ct.TileArray{Float32,1})
         pid = ct.bid(1)
         tile = ct.load(a, pid, (16,))
-        result = tile - 1.5f0
+        result = tile .- 1.5f0
         ct.store(b, pid, result)
         return
     end
@@ -918,11 +918,11 @@ end
     @test Array(b) ≈ Array(a) .- 1.5f0 rtol=1e-5
 end
 
-@testset "scalar - tile" begin
+@testset "scalar .- tile" begin
     function scalar_sub_tile_kernel(a::ct.TileArray{Float32,1}, b::ct.TileArray{Float32,1})
         pid = ct.bid(1)
         tile = ct.load(a, pid, (16,))
-        result = 5.0f0 - tile
+        result = 5.0f0 .- tile
         ct.store(b, pid, result)
         return
     end
