@@ -30,9 +30,7 @@ function memory_scope_to_scope(scope::Int)
     end
 end
 
-
-## cuda_tile.atomic_cas_tko
-
+# cuda_tile.atomic_cas_tko
 @eval Intrinsics begin
     """
         atomic_cas(array, index, expected, desired, memory_order, memory_scope)
@@ -47,7 +45,6 @@ end
         compilerbarrier(:const, zero(T))::T
     end
 end
-
 function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.atomic_cas), args)
     cb = ctx.cb
     tt = ctx.tt
@@ -107,9 +104,7 @@ function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.atomic_cas), args)
     CGVal(old_val, result_tile_type, elem_type, Int[])
 end
 
-
-## cuda_tile.atomic_rmw_tko (shared helper for atomic RMW operations)
-
+# cuda_tile.atomic_rmw_tko (shared helper for atomic RMW operations)
 function emit_atomic_rmw!(ctx::CGCtx, args::AbstractVector, mode::AtomicRMWMode)
     cb = ctx.cb
     tt = ctx.tt
@@ -173,9 +168,7 @@ function emit_atomic_rmw!(ctx::CGCtx, args::AbstractVector, mode::AtomicRMWMode)
     CGVal(old_val, result_tile_type, elem_type, Int[])
 end
 
-
-## cuda_tile.atomic_rmw_tko with XCHG
-
+# cuda_tile.atomic_rmw_tko with XCHG
 @eval Intrinsics begin
     """
         atomic_xchg(array, index, val, memory_order, memory_scope)
@@ -190,14 +183,11 @@ end
         compilerbarrier(:const, zero(T))
     end
 end
-
 function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.atomic_xchg), args)
     emit_atomic_rmw!(ctx, args, AtomicXCHG)
 end
 
-
-## cuda_tile.atomic_rmw_tko with ADD
-
+# cuda_tile.atomic_rmw_tko with ADD
 @eval Intrinsics begin
     """
         atomic_add(array, index, val, memory_order, memory_scope)
@@ -212,7 +202,6 @@ end
         compilerbarrier(:const, zero(T))
     end
 end
-
 function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.atomic_add), args)
     emit_atomic_rmw!(ctx, args, AtomicADD)
 end

@@ -1,15 +1,8 @@
-#=============================================================================
- 8.6. Memory
- cuda_tile.join_tokens, cuda_tile.load_ptr_tko, cuda_tile.make_token,
- cuda_tile.store_ptr_tko
-=============================================================================#
+# Memory
 
+# TODO: cuda_tile.join_tokens
 
-## TODO: cuda_tile.join_tokens
-
-
-## cuda_tile.load_ptr_tko
-
+# cuda_tile.load_ptr_tko
 @eval Intrinsics begin
     """
         load_ptr_tko(ptrs, mask=nothing, padding=nothing)
@@ -25,7 +18,6 @@
         Tile{T, S}()
     end
 end
-
 function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.load_ptr_tko), args)
     cb = ctx.cb
     tt = ctx.tt
@@ -74,12 +66,9 @@ function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.load_ptr_tko), args)
     CGVal(tile_val, result_tile_type, result_jltype, tile_shape)
 end
 
+# TODO: cuda_tile.make_token
 
-## TODO: cuda_tile.make_token
-
-
-## cuda_tile.store_ptr_tko
-
+# cuda_tile.store_ptr_tko
 @eval Intrinsics begin
     """
         store_ptr_tko(ptrs, values, mask=nothing)
@@ -94,7 +83,6 @@ end
         nothing
     end
 end
-
 function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.store_ptr_tko), args)
     cb = ctx.cb
     tt = ctx.tt
