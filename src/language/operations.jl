@@ -873,3 +873,21 @@ old_val = ct.atomic_add(counters, idx, Int32(1))
                             memory_scope::Int=MemScope.Device) where {T, N}
     Intrinsics.atomic_add(array, index - One(), val, memory_order, memory_scope)
 end
+
+#===============================================================================
+# Scan (Prefix Sum) Operations
+#===============================================================================
+
+@inline function scan(tile::Tile{T, S}, ::Val{axis};
+                      fn::Symbol=:add,
+                      reverse::Bool=false) where {T, S, axis}
+    Intrinsics.scan(tile, Val(axis), fn; reverse=reverse)
+end
+
+@inline function cumsum(tile::Tile{T, S}, ::Val{axis}; reverse::Bool=false) where {T, S, axis}
+    scan(tile, Val(axis); fn=:add, reverse=reverse)
+end
+
+@inline function cumprod(tile::Tile{T, S}, ::Val{axis}; reverse::Bool=false) where {T, S, axis}
+    scan(tile, Val(axis); fn=:mul, reverse=reverse)
+end

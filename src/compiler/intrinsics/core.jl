@@ -569,6 +569,18 @@ end
         reduced_shape = ntuple(i -> S[i < axis + 1 ? i : i + 1], length(S) - 1)
         Tile{T, reduced_shape}()
     end
+
+    """
+        scan(tile, axis_val, fn_type; reverse=false)
+
+    Parallel prefix scan along specified dimension.
+    fn_type=:add for cumulative sum, :mul for cumulative product.
+    Compiled to cuda_tile.scan.
+    """
+    @noinline function scan(tile::Tile{T, S}, ::Val{axis}, fn::Symbol; reverse::Bool=false) where {T, S, axis}
+        # Scan preserves shape - result has same dimensions as input
+        Tile{T, S}()
+    end
 end
 
 function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.reduce_sum), args)
@@ -628,6 +640,76 @@ function emit_reduce!(ctx::CGCtx, args, reduce_fn::Symbol)
 
     CGVal(results[1], output_tile_type, Tile{elem_type, Tuple(output_shape)}, output_shape)
 end
+
+function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.scan), args)
+    emit_scan!(ctx, args)
+end
+
+function emit_scan!(ctx::CGCtx, args)
+    cb = ctx.cb
+    tt = ctx.tt
+
+    # Get input tile
+    input_tv = emit_value!(ctx, args[1])
+    input_tv === nothing && error("Cannot resolve input tile for scan")
+
+    # Get scan axis
+    axis = @something get_constant(ctx, args[2]) error("Scan axis must be a compile-time constant")
+
+    # Get scan function type
+    fn_type = @something get_constant(ctx, args[3]) error("Scan function type must be a compile-time constant")
+    fn_type == :add || fn_type == :mul || error("Scan function must be :add or :mul")
+
+    # Get reverse flag (optional, defaults to false)
+    reverse = false
+    if length(args) >= 4
+        reverse_val = get_constant(ctx, args[4])
+        reverse = reverse_val === true
+    end
+
+    # Get element type and shapes
+    input_type = unwrap_type(input_tv.jltype)
+    elem_type = input_type <: Tile ? input_type.parameters[1] : input_type
+    input_shape = input_tv.shape
+
+    # For scan, output shape is same as input shape
+    output_shape = copy(input_shape)
+
+    dtype = julia_to_tile_dtype!(tt, elem_type)
+
+    # Output tile type (same shape as input)
+    output_tile_type = tile_type!(tt, dtype, output_shape)
+
+    # Scalar type for scan body (0D tile)
+    scalar_tile_type = tile_type!(tt, dtype, Int[])
+
+    # Create identity value
+    # For cumsum: identity is 0.0 (represented as -0.0 for float)
+    # For cumprod: identity is 1.0
+    if fn_type == :add
+        identity_val = -0.0  # Negative zero works as additive identity
+        identity = ScanFloatIdentity(identity_val, dtype, elem_type)
+    else  # :mul
+        identity_val = 1.0
+        identity = ScanFloatIdentity(identity_val, dtype, elem_type)
+    end
+
+    # Emit ScanOp
+    results = encode_ScanOp!(cb, [output_tile_type], [input_tv.v], axis, reverse, [identity], [scalar_tile_type]) do block_args
+        acc, elem = block_args[1], block_args[2]
+
+        if fn_type == :add
+            res = encode_AddFOp!(cb, scalar_tile_type, acc, elem)
+        else  # :mul
+            res = encode_MulFOp!(cb, scalar_tile_type, acc, elem)
+        end
+
+        encode_YieldOp!(cb, [res])
+    end
+
+    CGVal(results[1], output_tile_type, Tile{elem_type, Tuple(output_shape)}, output_shape)
+end
+
 
 
 ## cuda_tile.reshape
