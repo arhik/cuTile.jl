@@ -4,7 +4,8 @@
 ## cuda_tile.ceil
 
 @eval Intrinsics begin
-    """Element-wise ceiling (round toward positive infinity). Compiled to cuda_tile.ceil."""
+    """Ceiling (round toward positive infinity). Compiled to cuda_tile.ceil."""
+    @noinline ceil(x::T) where {T<:AbstractFloat} = Base.compilerbarrier(:const, x)
     @noinline function ceil(tile::Tile{T, S}) where {T <: AbstractFloat, S}
         Base.donotdelete(tile)
         Tile{T, S}()
@@ -19,7 +20,8 @@ end
 ## cuda_tile.cos
 
 @eval Intrinsics begin
-    """Element-wise cosine. Compiled to cuda_tile.cos."""
+    """Cosine. Compiled to cuda_tile.cos."""
+    @noinline cos(x::T) where {T<:AbstractFloat} = Base.compilerbarrier(:const, x)
     @noinline function cos(tile::Tile{T, S}) where {T <: AbstractFloat, S}
         Base.donotdelete(tile)
         Tile{T, S}()
@@ -34,7 +36,8 @@ end
 ## cuda_tile.cosh
 
 @eval Intrinsics begin
-    """Element-wise hyperbolic cosine. Compiled to cuda_tile.cosh."""
+    """Hyperbolic cosine. Compiled to cuda_tile.cosh."""
+    @noinline cosh(x::T) where {T<:AbstractFloat} = Base.compilerbarrier(:const, x)
     @noinline function cosh(tile::Tile{T, S}) where {T <: AbstractFloat, S}
         Base.donotdelete(tile)
         Tile{T, S}()
@@ -49,7 +52,8 @@ end
 ## cuda_tile.exp2
 
 @eval Intrinsics begin
-    """Element-wise base-2 exponential (2^x). Compiled to cuda_tile.exp2."""
+    """Base-2 exponential (2^x). Compiled to cuda_tile.exp2."""
+    @noinline exp2(x::T) where {T<:AbstractFloat} = Base.compilerbarrier(:const, x)
     @noinline function exp2(tile::Tile{T, S}, flush_to_zero::Bool=false) where {T <: AbstractFloat, S}
         Base.donotdelete(tile)
         Tile{T, S}()
@@ -73,7 +77,8 @@ end
 ## cuda_tile.exp
 
 @eval Intrinsics begin
-    """Element-wise natural exponential (e^x). Compiled to cuda_tile.exp."""
+    """Natural exponential (e^x). Compiled to cuda_tile.exp."""
+    @noinline exp(x::T) where {T<:AbstractFloat} = Base.compilerbarrier(:const, x)
     @noinline function exp(tile::Tile{T, S}) where {T <: AbstractFloat, S}
         Base.donotdelete(tile)
         Tile{T, S}()
@@ -95,7 +100,8 @@ end
 ## cuda_tile.floor
 
 @eval Intrinsics begin
-    """Element-wise floor (round toward negative infinity). Compiled to cuda_tile.floor."""
+    """Floor (round toward negative infinity). Compiled to cuda_tile.floor."""
+    @noinline floor(x::T) where {T<:AbstractFloat} = Base.compilerbarrier(:const, x)
     @noinline function floor(tile::Tile{T, S}) where {T <: AbstractFloat, S}
         Base.donotdelete(tile)
         Tile{T, S}()
@@ -110,7 +116,8 @@ end
 ## cuda_tile.fma
 
 @eval Intrinsics begin
-    """Element-wise fused multiply-add: a * b + c. Compiled to cuda_tile.fma."""
+    """Fused multiply-add: a * b + c. Compiled to cuda_tile.fma."""
+    @noinline fma(x::T, y::T, z::T) where {T<:AbstractFloat} = (Base.donotdelete(y, z); Base.compilerbarrier(:const, x))
     @noinline function fma(a::Tile{T, S}, b::Tile{T, S}, c::Tile{T, S}) where {T <: AbstractFloat, S}
         Base.donotdelete(a, b, c)
         Tile{T, S}()
@@ -135,7 +142,8 @@ end
 ## cuda_tile.log2
 
 @eval Intrinsics begin
-    """Element-wise base-2 logarithm. Compiled to cuda_tile.log2."""
+    """Base-2 logarithm. Compiled to cuda_tile.log2."""
+    @noinline log2(x::T) where {T<:AbstractFloat} = Base.compilerbarrier(:const, x)
     @noinline function log2(tile::Tile{T, S}) where {T <: AbstractFloat, S}
         Base.donotdelete(tile)
         Tile{T, S}()
@@ -158,6 +166,7 @@ end
 
 @eval Intrinsics begin
     """Element-wise natural logarithm. Compiled to cuda_tile.log."""
+    @noinline log(x::T) where {T<:AbstractFloat} = Base.compilerbarrier(:const, x)
     @noinline function log(tile::Tile{T, S}) where {T <: AbstractFloat, S}
         Base.donotdelete(tile)
         Tile{T, S}()
@@ -244,6 +253,7 @@ end
 
 @eval Intrinsics begin
     """Element-wise reciprocal square root. Compiled to cuda_tile.rsqrt."""
+    @noinline rsqrt(x::T) where {T<:AbstractFloat} = Base.compilerbarrier(:const, x)
     @noinline function rsqrt(tile::Tile{T, S}, flush_to_zero::Bool=false) where {T <: AbstractFloat, S}
         Base.donotdelete(tile)
         Tile{T, S}()
@@ -268,6 +278,7 @@ end
 
 @eval Intrinsics begin
     """Element-wise sine. Compiled to cuda_tile.sin."""
+    @noinline sin(x::T) where {T<:AbstractFloat} = Base.compilerbarrier(:const, x)
     @noinline function sin(tile::Tile{T, S}) where {T <: AbstractFloat, S}
         Base.donotdelete(tile)
         Tile{T, S}()
@@ -283,6 +294,7 @@ end
 
 @eval Intrinsics begin
     """Element-wise hyperbolic sine. Compiled to cuda_tile.sinh."""
+    @noinline sinh(x::T) where {T<:AbstractFloat} = Base.compilerbarrier(:const, x)
     @noinline function sinh(tile::Tile{T, S}) where {T <: AbstractFloat, S}
         Base.donotdelete(tile)
         Tile{T, S}()
@@ -298,6 +310,7 @@ end
 
 @eval Intrinsics begin
     """Element-wise square root. Compiled to cuda_tile.sqrt."""
+    @noinline sqrt(x::T) where {T<:AbstractFloat} = Base.compilerbarrier(:const, x)
     @noinline function sqrt(tile::Tile{T, S}) where {T <: AbstractFloat, S}
         Base.donotdelete(tile)
         Tile{T, S}()
@@ -320,6 +333,7 @@ end
 
 @eval Intrinsics begin
     """Element-wise tangent. Compiled to cuda_tile.tan."""
+    @noinline tan(x::T) where {T<:AbstractFloat} = Base.compilerbarrier(:const, x)
     @noinline function tan(tile::Tile{T, S}) where {T <: AbstractFloat, S}
         Base.donotdelete(tile)
         Tile{T, S}()
@@ -335,6 +349,7 @@ end
 
 @eval Intrinsics begin
     """Element-wise hyperbolic tangent. Compiled to cuda_tile.tanh."""
+    @noinline tanh(x::T) where {T<:AbstractFloat} = Base.compilerbarrier(:const, x)
     @noinline function tanh(tile::Tile{T, S}) where {T <: AbstractFloat, S}
         Base.donotdelete(tile)
         Tile{T, S}()

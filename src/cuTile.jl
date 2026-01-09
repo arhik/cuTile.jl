@@ -30,9 +30,11 @@ include("compiler/reflection.jl")
 
 # Language implementation
 include("language/broadcast.jl")
+include("language/overlays.jl")
+include("language/arithmetic.jl")
+include("language/math.jl")
 include("language/operations.jl")
 include("language/atomics.jl")
-include("language/overlays.jl")
 
 public launch
 launch() = error("Please import CUDA.jl before using `cuTile.launch`.")

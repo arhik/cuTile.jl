@@ -162,11 +162,35 @@ function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.addi), args)
 end
 
 
-## cuda_tile.divi
+## cuda_tile.divi (truncating division, toward zero)
 
 function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.divi), args)
     signedness = @something get_constant(ctx, args[3]) error("divi requires compile-time signedness")
     emit_binop!(ctx, args, encode_DivIOp!; signedness, rounding=RoundingZero)
+end
+
+
+## cuda_tile.fldi (floor division, toward negative infinity)
+
+@eval Intrinsics begin
+    @noinline fldi(x::T, y::T, s::Signedness) where {T<:Integer} = Base.fld(x, y)
+end
+
+function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.fldi), args)
+    signedness = @something get_constant(ctx, args[3]) error("fldi requires compile-time signedness")
+    emit_binop!(ctx, args, encode_DivIOp!; signedness, rounding=RoundingNegativeInf)
+end
+
+
+## cuda_tile.cldi (ceiling division, toward positive infinity)
+
+@eval Intrinsics begin
+    @noinline cldi(x::T, y::T, s::Signedness) where {T<:Integer} = Base.cld(x, y)
+end
+
+function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.cldi), args)
+    signedness = @something get_constant(ctx, args[3]) error("cldi requires compile-time signedness")
+    emit_binop!(ctx, args, encode_DivIOp!; signedness, rounding=RoundingPositiveInf)
 end
 
 

@@ -616,7 +616,7 @@
                     tile_b = ct.load(b, pid, (16,))
                     tile_c = ct.load(c, pid, (16,))
                     @check "fma"
-                    result = ct.fma(tile_a, tile_b, tile_c)
+                    result = fma.(tile_a, tile_b, tile_c)
                     ct.store(d, pid, result)
                     return
                 end
@@ -890,6 +890,67 @@
                     @check "broadcast"
                     @check "divf"
                     result = tile ./ 2.0f0
+                    ct.store(b, pid, result)
+                    return
+                end
+            end
+        end
+
+        @testset "scalar math functions" begin
+            # Test scalar math functions via overlays (sin, exp, sqrt, etc. on scalars)
+            # Note: We pass scalar args to avoid constant folding at compile time
+            @test @filecheck begin
+                @check_label "entry"
+                code_tiled(Tuple{ct.TileArray{Float32,1,spec1d}, ct.TileArray{Float32,1,spec1d}, Float32}) do a, b, x
+                    pid = ct.bid(1)
+                    tile = ct.load(a, pid, (16,))
+                    @check "sin"
+                    scale = sin(x)
+                    @check "broadcast"
+                    @check "mulf"
+                    result = tile .* scale
+                    ct.store(b, pid, result)
+                    return
+                end
+            end
+
+            @test @filecheck begin
+                @check_label "entry"
+                code_tiled(Tuple{ct.TileArray{Float32,1,spec1d}, ct.TileArray{Float32,1,spec1d}, Float32}) do a, b, x
+                    pid = ct.bid(1)
+                    tile = ct.load(a, pid, (16,))
+                    @check "exp"
+                    scale = exp(x)
+                    @check "broadcast"
+                    result = tile .* scale
+                    ct.store(b, pid, result)
+                    return
+                end
+            end
+
+            @test @filecheck begin
+                @check_label "entry"
+                code_tiled(Tuple{ct.TileArray{Float32,1,spec1d}, ct.TileArray{Float32,1,spec1d}, Float32}) do a, b, x
+                    pid = ct.bid(1)
+                    tile = ct.load(a, pid, (16,))
+                    @check "sqrt"
+                    scale = sqrt(x)
+                    @check "broadcast"
+                    result = tile .* scale
+                    ct.store(b, pid, result)
+                    return
+                end
+            end
+
+            @test @filecheck begin
+                @check_label "entry"
+                code_tiled(Tuple{ct.TileArray{Float32,1,spec1d}, ct.TileArray{Float32,1,spec1d}, Float32}) do a, b, x
+                    pid = ct.bid(1)
+                    tile = ct.load(a, pid, (16,))
+                    @check "rsqrt"
+                    scale = ct.rsqrt(x)
+                    @check "broadcast"
+                    result = tile .* scale
                     ct.store(b, pid, result)
                     return
                 end

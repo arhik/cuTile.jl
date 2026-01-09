@@ -1,8 +1,4 @@
 # cuTile DSL operations
-#
-# Mimcs, and organized according to, the cuTile Python API:
-# https://docs.nvidia.com/cuda/cutile-python/operations.html
-
 
 # Helper to extract compile-time shape from various tuple types
 @inline _extract_shape(s::NTuple{N, Int}) where N = s
@@ -588,67 +584,8 @@ br = ct.extract(tile, (2, 2), (4, 4))  # Bottom-right (rows 5-8, cols 5-8)
     Intrinsics.extract(tile, Val(map(i -> i - 1, Index)), Val(Shape))
 
 #=============================================================================
- Math
+ Matrix Multiplication
 =============================================================================#
-
-public cdiv, floordiv, fma, mulhi
-
-"""
-    cdiv(a::Integer, b::Integer)
-
-Ceiling division: ⌈a/b⌉ = (a + b - 1) ÷ b
-Useful for computing grid dimensions from array sizes and tile sizes.
-"""
-@inline cdiv(a::T, b::T) where {T<:Integer} =
-    Intrinsics.divi(Intrinsics.subi(Intrinsics.addi(a, b), one(T)), b, SignednessSigned)
-@inline cdiv(a::Integer, b::Integer) = cdiv(promote(a, b)...)
-
-"""
-    floordiv(a::Integer, b::Integer)
-
-Floor division: ⌊a/b⌋
-Equivalent to `a ÷ b` but provided for consistency with the cuTile API.
-"""
-@inline floordiv(a::T, b::T) where {T<:Integer} = Intrinsics.divi(a, b, SignednessSigned)
-@inline floordiv(a::Integer, b::Integer) = floordiv(promote(a, b)...)
-
-"""
-    fma(a::Tile, b::Tile, c::Tile) -> Tile
-
-Element-wise fused multiply-add: a * b + c.
-Provides strict FMA semantics - the intermediate result is not rounded.
-
-# Example
-```julia
-result = ct.fma(a, b, c)  # Element-wise: a[i] * b[i] + c[i]
-```
-"""
-@inline fma(a::Tile{T, S}, b::Tile{T, S}, c::Tile{T, S}) where {T <: AbstractFloat, S} =
-    Intrinsics.fma(a, b, c)
-
-"""
-    mulhi(a::Tile{T}, b::Tile{T}) -> Tile{T}
-
-High bits of integer multiply (for extended precision arithmetic).
-Returns the upper half of the 2N-bit product of two N-bit integers.
-
-# Example
-```julia
-# For 32-bit integers, returns the upper 32 bits of the 64-bit product
-high_bits = ct.mulhi(a, b)
-```
-"""
-@inline mulhi(a::Tile{T, S}, b::Tile{T, S}) where {T <: Signed, S} =
-    Intrinsics.mulhii(a, b, SignednessSigned)
-@inline mulhi(a::Tile{T, S}, b::Tile{T, S}) where {T <: Unsigned, S} =
-    Intrinsics.mulhii(a, b, SignednessUnsigned)
-
-
-# Tile-tile operators (same shape required, like Julia arrays)
-@inline Base.:(+)(a::Tile{T, S}, b::Tile{T, S}) where {T <: AbstractFloat, S} = Intrinsics.addf(a, b)
-@inline Base.:(+)(a::Tile{T, S}, b::Tile{T, S}) where {T <: Integer, S} = Intrinsics.addi(a, b)
-@inline Base.:(-)(a::Tile{T, S}, b::Tile{T, S}) where {T <: AbstractFloat, S} = Intrinsics.subf(a, b)
-@inline Base.:(-)(a::Tile{T, S}, b::Tile{T, S}) where {T <: Integer, S} = Intrinsics.subi(a, b)
 
 # Matrix multiplication (A * B like Julia arrays)
 @inline Base.:(*)(a::Tile, b::Tile) = matmul(a, b)

@@ -164,12 +164,16 @@ conservative token threading in the compiler (see https://github.com/JuliaGPU/cu
 ### Math
 | Operation | Description |
 |-----------|-------------|
-| `sqrt.(tile)` | Element-wise square root |
-| `rsqrt.(tile)` | Element-wise reciprocal square root |
-| `exp.(tile)` | Element-wise exponential |
-| `exp2.(tile)` | Element-wise base-2 exponential |
-| `log.(tile)` | Element-wise natural logarithm |
-| `log2.(tile)` | Element-wise base-2 logarithm |
+| `sqrt.(tile)`, `sqrt(x)` | Square root (tile broadcast or scalar) |
+| `rsqrt.(tile)`, `rsqrt(x)` | Reciprocal square root |
+| `exp.(tile)`, `exp(x)` | Natural exponential |
+| `exp2.(tile)`, `exp2(x)` | Base-2 exponential |
+| `log.(tile)`, `log(x)` | Natural logarithm |
+| `log2.(tile)`, `log2(x)` | Base-2 logarithm |
+| `sin.(tile)`, `cos.(tile)`, etc. | Trigonometric functions |
+| `fma.(a, b, c)`, `fma(x, y, z)` | Fused multiply-add (tile broadcast or scalar) |
+| `abs.(tile)`, `abs(x)` | Absolute value |
+| `max(a, b)`, `min(a, b)` | Maximum/minimum (scalars) |
 
 ### Comparison
 | Operation | Description |
@@ -189,6 +193,7 @@ conservative token threading in the compiler (see https://github.com/JuliaGPU/cu
 |-----------|-------------|
 | `cdiv(a, b)` | Ceiling division |
 | `floordiv(a, b)` | Floor division |
+| `mulhi(a, b)` | High bits of integer multiply |
 
 ### Atomics
 | Operation | Description |
