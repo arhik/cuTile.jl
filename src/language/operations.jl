@@ -874,9 +874,7 @@ old_val = ct.atomic_add(counters, idx, Int32(1))
     Intrinsics.atomic_add(array, index - One(), val, memory_order, memory_scope)
 end
 
-#===============================================================================
 # Scan (Prefix Sum) Operations
-#===============================================================================
 
 @inline function scan(tile::Tile{T, S}, ::Val{axis};
                       fn::Symbol=:add,
