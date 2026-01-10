@@ -1,6 +1,5 @@
 # Scan Example for cuTile.jl
-# Demonstrates CSDL (Chained Scan with Decoupled Lookback) - single phase
-# Uses memory ordering (acquire/release) for block chaining
+# Demonstrates CSDL (Chained Scan with Decoupled Lookback) for full array cumsum
 #
 # Run with: julia --project=. examples/scan.jl
 
@@ -33,85 +32,82 @@ function test_block_level()
 end
 
 # ============================================================================
-# CSDL: Single-phase Chained Scan with Decoupled Lookback
-# ============================================================================
+# CSDL: Chained Scan with Decoupled Lookback
 #
-# CSDL algorithm (single-phase):
-# 1. Each block computes local tile scan
-# 2. Each block atomically adds its tile sum to shared counter
-# 3. Each block waits until its turn (counter >= bid)
-# 4. Each block reads cumulative sum of all previous blocks
-# 5. Adds cumulative sum to local scan and stores final result
-#
-# Memory ordering:
-# - Atomic add with release: other blocks can see this block's contribution
-# - Atomic load with acquire: see all previous blocks' contributions
+# Uses spinlock with atomic_cas for synchronization between blocks.
+# Each block:
+# 1. Acquires lock to read accumulated tile sums
+# 2. Computes local cumsum + accumulated sum from previous tiles
+# 3. Stores result
+# 4. Releases lock (implicit, next block can proceed)
 # ============================================================================
 
 function cumsum_csdl(input::ct.TileArray{Float32,1},
                      output::ct.TileArray{Float32,1},
-                     tile_sums::ct.TileArray{Float32,1},
+                     locks::ct.TileArray{Int32,1},
+                     tile_sums::ct.TileArray{Float32,2},
                      tile_size::ct.Constant{Int},
                      num_tiles::ct.Constant{Int})
     bid = ct.bid(1)
     bid_i = Int32(bid)
 
-    # Step 1: Load tile and compute local cumulative sum
+    # Step 1: Compute local cumsum for this tile
     tile = ct.load(input, bid, (tile_size[],))
     local_scan = ct.cumsum(tile, ct.axis(1))
-    my_sum = ct.extract(local_scan, (tile_size[],), (1,))
+    my_tile_sum = ct.extract(local_scan, (tile_size[],), (1,))
 
-    # Step 2: Atomically add my_sum to tile_sums[1] with release ordering
-    # This makes my_sum visible to other blocks
-    current_count = ct.atomic_add(tile_sums, (1,), my_sum)
-    # current_count is now the sum of all blocks that wrote before me
-
-    # Step 3: Wait for all previous blocks to complete
-    # My position in chain is bid_i (1-indexed), I need tile_sums[1] >= bid_i
-    # (each block contributes exactly once)
-    while true
-        accumulated = ct.load(tile_sums, (1,), (1,))
-        if accumulated >= bid_i
-            break
-        end
+    # Step 2: Acquire lock to read accumulated tile sums and add mine
+    # Spin until we acquire the lock
+    while ct.atomic_cas(locks, (1,), Int32(0), Int32(1);
+                       memory_order=ct.MemoryOrder.Acquire) == Int32(1)
+        # Spin - lock is held by another block
     end
 
-    # Step 4: Load cumulative sum of all previous tiles (acquire ordering)
-    # This ensures we see all previous blocks' contributions
-    prev_sums = ct.zeros((tile_size[],), Float32)
+    # Now we hold the lock - critical section
+    # Read accumulated tile sums up to bid_i-1
+    prev_sum = ct.zeros((tile_size[],), Float32)
     k = Int32(1)
     while k < bid_i
-        tile_sum_k = ct.load(tile_sums, (k,), (1,))
-        prev_sums = prev_sums .+ tile_sum_k
+        tile_sum_k = ct.load(tile_sums, (k, 1), (1, 1))
+        prev_sum = prev_sum .+ tile_sum_k
         k += Int32(1)
     end
 
-    # Step 5: Add cumulative previous sums to local scan
-    result = local_scan .+ prev_sums
+    # Add my tile sum to the accumulated column
+    ct.store(tile_sums, (bid_i, 1), my_tile_sum)
 
-    # Step 6: Store final result
+    # Step 3: Release lock (next block can proceed)
+    # Release semantics ensures our writes are visible
+    ct.atomic_cas(locks, (1,), Int32(1), Int32(0);
+                  memory_order=ct.MemoryOrder.Release)
+
+    # Step 4: Add accumulated sum from previous tiles to local scan
+    result = local_scan .+ prev_sum
     ct.store(output, bid, result)
 
     return nothing
 end
 
-# Full CSDL cumsum wrapper (single phase)
+# Full CSDL cumsum wrapper
 function cumsum_csdl_full(input::CuArray{Float32,1}, tile_size::Int=256)
     n = length(input)
     num_tiles = cld(n, tile_size)
     output = CUDA.zeros(Float32, n)
-    # tile_sums stores cumulative sum at index 1, each block adds once
-    tile_sums = CUDA.zeros(Float32, 1)
 
-    CUDA.@sync ct.launch(cumsum_csdl, num_tiles, input, output, tile_sums,
+    # locks: single Int32, 0 = unlocked, 1 = locked
+    locks = CUDA.zeros(Int32, 1)
+
+    # tile_sums: (num_tiles, 1) - cumulative sum of each tile
+    # We use 2D to allow ct.load with (k, 1) indexing
+    tile_sums = CUDA.zeros(Float32, (num_tiles, 1))
+
+    CUDA.@sync ct.launch(cumsum_csdl, num_tiles, input, output, locks, tile_sums,
                          ct.Constant(tile_size), ct.Constant(num_tiles))
+
     return output
 end
 
-# ============================================================================
 # Main test
-# ============================================================================
-
 function main()
     println("cuTile CSDL Scan Example")
     println("========================")
