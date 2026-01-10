@@ -20,7 +20,7 @@ import cuTile as ct
         ir = ct.code_tiled(Tuple{ct.TileArray{Float32,2,spec2d}, ct.TileArray{Float32,2,spec2d}}) do a, b
             pid = ct.bid(1)
             tile = ct.load(a, pid, (4, 8))
-            result = ct.cumsum(tile, Val(1))
+            result = ct.cumsum(tile, ct.axis(1))
             ct.store(b, pid, result)
             return
         end
@@ -33,7 +33,7 @@ import cuTile as ct
         ir = ct.code_tiled(Tuple{ct.TileArray{Float32,2,spec2d}, ct.TileArray{Float32,2,spec2d}}) do a, b
             pid = ct.bid(1)
             tile = ct.load(a, pid, (4, 8))
-            result = ct.cumprod(tile, Val(1))
+            result = ct.cumprod(tile, ct.axis(1))
             ct.store(b, pid, result)
             return
         end
@@ -45,7 +45,7 @@ import cuTile as ct
         ir = ct.code_tiled(Tuple{ct.TileArray{Float32,2,spec2d}, ct.TileArray{Float32,2,spec2d}}) do a, b
             pid = ct.bid(1)
             tile = ct.load(a, pid, (4, 8))
-            result = ct.scan(tile, Val(1), :add)
+            result = ct.scan(tile, ct.axis(1), :add)
             ct.store(b, pid, result)
             return
         end
@@ -57,7 +57,7 @@ import cuTile as ct
         ir = ct.code_tiled(Tuple{ct.TileArray{Float32,2,spec2d}, ct.TileArray{Float32,2,spec2d}}) do a, b
             pid = ct.bid(1)
             tile = ct.load(a, pid, (4, 8))
-            result = ct.scan(tile, Val(1), :mul)
+            result = ct.scan(tile, ct.axis(1), :mul)
             ct.store(b, pid, result)
             return
         end
@@ -72,7 +72,7 @@ import cuTile as ct
         ir = ct.code_tiled(Tuple{ct.TileArray{Float64,2,spec2d}, ct.TileArray{Float64,2,spec2d}}) do a, b
             pid = ct.bid(1)
             tile = ct.load(a, pid, (4, 8))
-            result = ct.cumsum(tile, Val(1))
+            result = ct.cumsum(tile, ct.axis(1))
             ct.store(b, pid, result)
             return
         end
@@ -84,7 +84,7 @@ import cuTile as ct
         ir = ct.code_tiled(Tuple{ct.TileArray{Int32,2,spec2d}, ct.TileArray{Int32,2,spec2d}}) do a, b
             pid = ct.bid(1)
             tile = ct.load(a, pid, (4, 8))
-            result = ct.cumsum(tile, Val(1))
+            result = ct.cumsum(tile, ct.axis(1))
             ct.store(b, pid, result)
             return
         end
@@ -99,7 +99,7 @@ import cuTile as ct
         ir = ct.code_tiled(Tuple{ct.TileArray{Float32,2,spec2d}, ct.TileArray{Float32,2,spec2d}}) do a, b
             pid = ct.bid(1)
             tile = ct.load(a, pid, (4, 8))
-            result = ct.cumsum(tile, Val(0))
+            result = ct.cumsum(tile, ct.axis(1))
             ct.store(b, pid, result)
             return
         end
@@ -111,7 +111,7 @@ import cuTile as ct
         ir = ct.code_tiled(Tuple{ct.TileArray{Float32,2,spec2d}, ct.TileArray{Float32,2,spec2d}}) do a, b
             pid = ct.bid(1)
             tile = ct.load(a, pid, (4, 8))
-            result = ct.cumsum(tile, Val(1))
+            result = ct.cumsum(tile, ct.axis(2))
             ct.store(b, pid, result)
             return
         end
@@ -123,7 +123,7 @@ import cuTile as ct
         ir = ct.code_tiled(Tuple{ct.TileArray{Float32,3,spec3d}, ct.TileArray{Float32,3,spec3d}}) do a, b
             pid = ct.bid(1)
             tile = ct.load(a, pid, (2, 4, 8))
-            result = ct.cumsum(tile, Val(0))
+            result = ct.cumsum(tile, ct.axis(1))
             ct.store(b, pid, result)
             return
         end
@@ -135,7 +135,7 @@ import cuTile as ct
         ir = ct.code_tiled(Tuple{ct.TileArray{Float32,3,spec3d}, ct.TileArray{Float32,3,spec3d}}) do a, b
             pid = ct.bid(1)
             tile = ct.load(a, pid, (2, 4, 8))
-            result = ct.cumsum(tile, Val(1))
+            result = ct.cumsum(tile, ct.axis(2))
             ct.store(b, pid, result)
             return
         end
@@ -147,7 +147,7 @@ import cuTile as ct
         ir = ct.code_tiled(Tuple{ct.TileArray{Float32,3,spec3d}, ct.TileArray{Float32,3,spec3d}}) do a, b
             pid = ct.bid(1)
             tile = ct.load(a, pid, (2, 4, 8))
-            result = ct.cumsum(tile, Val(2))
+            result = ct.cumsum(tile, ct.axis(3))
             ct.store(b, pid, result)
             return
         end
@@ -162,7 +162,7 @@ import cuTile as ct
         ir = ct.code_tiled(Tuple{ct.TileArray{Float32,2,spec2d}, ct.TileArray{Float32,2,spec2d}}) do a, b
             pid = ct.bid(1)
             tile = ct.load(a, pid, (4, 8))
-            result = ct.cumsum(tile, Val(1))
+            result = ct.cumsum(tile, ct.axis(1))
             ct.store(b, pid, result)
             return
         end
@@ -173,7 +173,7 @@ import cuTile as ct
         ir = ct.code_tiled(Tuple{ct.TileArray{Float32,3,spec3d}, ct.TileArray{Float32,3,spec3d}}) do a, b
             pid = ct.bid(1)
             tile = ct.load(a, pid, (2, 4, 8))
-            result = ct.cumsum(tile, Val(0))
+            result = ct.cumsum(tile, ct.axis(1))
             ct.store(b, pid, result)
             return
         end

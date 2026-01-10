@@ -159,7 +159,7 @@
                     tile1 = ct.load(a, pid, (4, 8))
                     tile2 = ct.load(b, pid, (4, 8))
                     @check "cat"
-                    combined = ct.cat((tile1, tile2), Val(1))  # -> (8, 8)
+                    combined = ct.cat((tile1, tile2), ct.axis(1))  # -> (8, 8)
                     ct.store(a, pid, combined)
                     return
                 end

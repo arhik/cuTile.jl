@@ -21,7 +21,7 @@ const TILE_H = 2^15
         ) do a, b
             pid = ct.bid(1)
             tile = ct.load(a, pid, (8, 64))
-            result = ct.cumsum(tile, Val(1))
+            result = ct.cumsum(tile, ct.axis(2))
             ct.store(b, pid, result)
             return
         end
@@ -37,7 +37,7 @@ const TILE_H = 2^15
         ) do a, b
             pid = ct.bid(1)
             tile = ct.load(a, pid, (8, 64))
-            result = ct.cumsum(tile, Val(1))
+            result = ct.cumsum(tile, ct.axis(2))
             ct.store(b, pid, result)
             return
         end
@@ -50,7 +50,7 @@ const TILE_H = 2^15
         ) do a, b
             pid = ct.bid(1)
             tile = ct.load(a, pid, (8, 64))
-            result = ct.cumsum(tile, Val(1), true)
+            result = ct.cumsum(tile, ct.axis(2), true)
             ct.store(b, pid, result)
             return
         end
@@ -63,7 +63,7 @@ const TILE_H = 2^15
         ) do a, b
             pid = ct.bid(1)
             tile = ct.load(a, pid, (8, 64))
-            result = ct.cumprod(tile, Val(1))
+            result = ct.cumprod(tile, ct.axis(2))
             ct.store(b, pid, result)
             return
         end

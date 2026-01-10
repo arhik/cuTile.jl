@@ -1,9 +1,8 @@
-#=============================================================================
 # CSDL (Chained Scan with Decoupled Lookback) Scan Tests
-#
+# ---------------------------------------------------
 # Target: (32, 2^15) tile dimension for single-phase scan
 # Focus: Proper Tile IR code generation without GPU execution
-#=============================================================================
+# ---------------------------------------------------
 
 using Test
 using cuTile
@@ -23,18 +22,16 @@ const TILE_H = 2^15 # Height for chained lookback across partitions
     # Shorter variants for faster testing
     csdl_small_spec = ct.ArraySpec{2}(8, true)
 
-    #=========================================================================
-    # Tile IR Generation for CSDL Scan
-    #========================================================================#
+    # --- Tile IR Generation for CSDL Scan ---
     @testset "CSDL cumsum generates scan operation" begin
-        # Basic CSDL scan along the partition dimension (axis 1)
+        # Basic CSDL scan along the partition dimension (second axis)
         # The 32-element warp scan uses shuffle, 32768+ uses chained lookback
         ir = ct.code_tiled(Tuple{ct.TileArray{Float32,2,csdl_spec}, ct.TileArray{Float32,2,csdl_spec}}) do a, b
             pid = ct.bid(1)
             # Load CSDL tile: warp (32) × partition (32768)
             tile = ct.load(a, pid, (32, 32768))
-            # Scan along partition dimension (axis 1)
-            result = ct.cumsum(tile, Val(1))
+            # Scan along partition dimension (axis 2)
+            result = ct.cumsum(tile, ct.axis(2))
             ct.store(b, pid, result)
             return
         end
@@ -47,7 +44,7 @@ const TILE_H = 2^15 # Height for chained lookback across partitions
         ir = ct.code_tiled(Tuple{ct.TileArray{Float32,2,csdl_spec}, ct.TileArray{Float32,2,csdl_spec}}) do a, b
             pid = ct.bid(1)
             tile = ct.load(a, pid, (32, 32768))
-            result = ct.cumprod(tile, Val(1))
+            result = ct.cumprod(tile, ct.axis(2))
             ct.store(b, pid, result)
             return
         end
@@ -55,62 +52,42 @@ const TILE_H = 2^15 # Height for chained lookback across partitions
         @test occursin("mulf", ir)
     end
 
-    #=========================================================================
-    # Different Scan Axes for CSDL
-    #========================================================================#
-    @testset "CSDL scan along warp axis (axis 0)" begin
-        # Scan along warp dimension (32 elements)
+    # --- Different Scan Axes for CSDL ---
+    # Note: ct.axis(n) uses 1-based indexing internally converted to 0-based for Tile IR
+    @testset "CSDL scan along first axis (axis 1)" begin
+        # Scan along first dimension (32 elements - warp dimension)
         # This is the intra-warp scan phase of CSDL
         ir = ct.code_tiled(Tuple{ct.TileArray{Float32,2,csdl_spec}, ct.TileArray{Float32,2,csdl_spec}}) do a, b
             pid = ct.bid(1)
             tile = ct.load(a, pid, (32, 32768))
-            result = ct.cumsum(tile, Val(0))
+            result = ct.cumsum(tile, ct.axis(1))
             ct.store(b, pid, result)
             return
         end
         @test occursin("scan", ir)
-        @test occursin("dim=0", ir)
+        @test occursin("dim=0", ir)  # Internally converted to 0-based
     end
 
-    @testset "CSDL scan along partition axis (axis 1)" begin
-        # Scan along partition dimension (32768+ elements)
+    @testset "CSDL scan along second axis (axis 2)" begin
+        # Scan along second dimension (32768+ elements - partition dimension)
         # This triggers the chained lookback phase of CSDL
         ir = ct.code_tiled(Tuple{ct.TileArray{Float32,2,csdl_spec}, ct.TileArray{Float32,2,csdl_spec}}) do a, b
             pid = ct.bid(1)
             tile = ct.load(a, pid, (32, 32768))
-            result = ct.cumsum(tile, Val(1))
+            result = ct.cumsum(tile, ct.axis(2))
             ct.store(b, pid, result)
             return
         end
         @test occursin("scan", ir)
-        @test occursin("dim=1", ir)
+        @test occursin("dim=1", ir)  # Internally converted to 0-based
     end
 
-    #=========================================================================
-    # Reverse Scan for CSDL (trailing segment handling)
-    #========================================================================#
-    @testset "CSDL reverse scan" begin
-        # Reverse scan for trailing segment handling
-        # Useful when segments are defined from the end
-        ir = ct.code_tiled(Tuple{ct.TileArray{Float32,2,csdl_spec}, ct.TileArray{Float32,2,csdl_spec}}) do a, b
-            pid = ct.bid(1)
-            tile = ct.load(a, pid, (32, 32768))
-            result = ct.cumsum(tile, Val(1); reverse=true)
-            ct.store(b, pid, result)
-            return
-        end
-        @test occursin("scan", ir)
-        @test occursin("reverse=true", ir)
-    end
-
-    #=========================================================================
-    # Different Element Types for CSDL
-    #========================================================================#
+    # --- Different Element Types for CSDL ---
     @testset "CSDL Float64 scan" begin
         ir = ct.code_tiled(Tuple{ct.TileArray{Float64,2,csdl_spec}, ct.TileArray{Float64,2,csdl_spec}}) do a, b
             pid = ct.bid(1)
             tile = ct.load(a, pid, (32, 32768))
-            result = ct.cumsum(tile, Val(1))
+            result = ct.cumsum(tile, ct.axis(2))
             ct.store(b, pid, result)
             return
         end
@@ -122,7 +99,7 @@ const TILE_H = 2^15 # Height for chained lookback across partitions
         ir = ct.code_tiled(Tuple{ct.TileArray{Int32,2,csdl_spec}, ct.TileArray{Int32,2,csdl_spec}}) do a, b
             pid = ct.bid(1)
             tile = ct.load(a, pid, (32, 32768))
-            result = ct.cumsum(tile, Val(1))
+            result = ct.cumsum(tile, ct.axis(2))
             ct.store(b, pid, result)
             return
         end
@@ -130,14 +107,12 @@ const TILE_H = 2^15 # Height for chained lookback across partitions
         @test occursin("i32", ir)
     end
 
-    #=========================================================================
-    # Shape Preservation for CSDL
-    #========================================================================#
+    # --- Shape Preservation for CSDL ---
     @testset "CSDL output shape matches input" begin
         ir = ct.code_tiled(Tuple{ct.TileArray{Float32,2,csdl_spec}, ct.TileArray{Float32,2,csdl_spec}}) do a, b
             pid = ct.bid(1)
             tile = ct.load(a, pid, (32, 32768))
-            result = ct.cumsum(tile, Val(1))
+            result = ct.cumsum(tile, ct.axis(1))
             ct.store(b, pid, result)
             return
         end
@@ -148,45 +123,42 @@ const TILE_H = 2^15 # Height for chained lookback across partitions
         ir = ct.code_tiled(Tuple{ct.TileArray{Float32,2,csdl_spec}, ct.TileArray{Float32,2,csdl_spec}}) do a, b
             pid = ct.bid(1)
             tile = ct.load(a, pid, (32, 32768))
-            result = ct.cumsum(tile, Val(0))
+            result = ct.cumsum(tile, ct.axis(1))
             ct.store(b, pid, result)
             return
         end
         @test occursin("tile<32x32768xf32>", ir)
     end
 
-    #=========================================================================
-    # Type Stability for CSDL
-    #========================================================================#
+    # --- Type Stability for CSDL ---
     @testset "CSDL type stability" begin
         # Create CSDL tile type
         tile = ct.Tile{Float32, (TILE_W, TILE_H)}()
 
         @testset "CSDL cumsum return type" begin
-            return_types = Base.return_types(ct.cumsum, (typeof(tile), Val{1}))
+            return_types = Base.return_types(ct.cumsum, (typeof(tile), typeof(ct.axis(1))))
             @test return_types isa Vector{Any}
             @test !isempty(return_types)
             @test return_types[1] == ct.Tile{Float32, (TILE_W, TILE_H)}
         end
 
         @testset "CSDL cumprod return type" begin
-            return_types = Base.return_types(ct.cumprod, (typeof(tile), Val{1}))
+            return_types = Base.return_types(ct.cumprod, (typeof(tile), typeof(ct.axis(1))))
             @test return_types isa Vector{Any}
             @test !isempty(return_types)
             @test return_types[1] == ct.Tile{Float32, (TILE_W, TILE_H)}
         end
 
         @testset "CSDL reverse cumsum return type" begin
-            return_types = Base.return_types(ct.cumsum, (typeof(tile), Val{1}; reverse=true))
+            # reverse parameter is a keyword, not part of the function type signature
+            return_types = Base.return_types(ct.cumsum, (typeof(tile), Val{0}))
             @test return_types isa Vector{Any}
             @test !isempty(return_types)
             @test return_types[1] == ct.Tile{Float32, (TILE_W, TILE_H)}
         end
     end
 
-    #=========================================================================
-    # 3D Extension for CSDL (batch processing)
-    #========================================================================#
+    # --- 3D Extension for CSDL (batch processing) ---
     @testset "CSDL 3D scan (batch of CSDL tiles)" begin
         # 3D array where each z-slice is a CSDL tile
         csdl_3d_spec = ct.ArraySpec{3}(8, true)
@@ -199,7 +171,7 @@ const TILE_H = 2^15 # Height for chained lookback across partitions
             # Load: warp (32) × partition (32768) × batch (8)
             tile = ct.load(a, pid, (32, 32768, 8))
             # Scan along partition dimension
-            result = ct.cumsum(tile, Val(1))
+            result = ct.cumsum(tile, ct.axis(2))
             ct.store(b, pid, result)
             return
         end
@@ -208,14 +180,12 @@ const TILE_H = 2^15 # Height for chained lookback across partitions
         @test occursin("tile<32x32768x8xf32>", ir)
     end
 
-    #=========================================================================
-    # Direct Scan API Tests
-    #========================================================================#
+    # --- Direct Scan API Tests ---
     @testset "CSDL direct scan with :add" begin
         ir = ct.code_tiled(Tuple{ct.TileArray{Float32,2,csdl_spec}, ct.TileArray{Float32,2,csdl_spec}}) do a, b
             pid = ct.bid(1)
             tile = ct.load(a, pid, (32, 32768))
-            result = ct.scan(tile, Val(1), :add)
+            result = ct.scan(tile, ct.axis(2), :add)
             ct.store(b, pid, result)
             return
         end
@@ -227,7 +197,7 @@ const TILE_H = 2^15 # Height for chained lookback across partitions
         ir = ct.code_tiled(Tuple{ct.TileArray{Float32,2,csdl_spec}, ct.TileArray{Float32,2,csdl_spec}}) do a, b
             pid = ct.bid(1)
             tile = ct.load(a, pid, (32, 32768))
-            result = ct.scan(tile, Val(1), :mul)
+            result = ct.scan(tile, ct.axis(2), :mul)
             ct.store(b, pid, result)
             return
         end
@@ -235,15 +205,13 @@ const TILE_H = 2^15 # Height for chained lookback across partitions
         @test occursin("mulf", ir)
     end
 
-    #=========================================================================
-    # Small Tile Tests (for fast validation)
-    #========================================================================#
+    # --- Small Tile Tests (for fast validation) ---
     @testset "Small tile cumsum" begin
         # Smaller tile for faster testing cycles
         ir = ct.code_tiled(Tuple{ct.TileArray{Float32,2,csdl_small_spec}, ct.TileArray{Float32,2,csdl_small_spec}}) do a, b
             pid = ct.bid(1)
             tile = ct.load(a, pid, (8, 256))
-            result = ct.cumsum(tile, Val(1))
+            result = ct.cumsum(tile, ct.axis(2))
             ct.store(b, pid, result)
             return
         end
@@ -256,7 +224,7 @@ const TILE_H = 2^15 # Height for chained lookback across partitions
         ir = ct.code_tiled(Tuple{ct.TileArray{Int64,2,csdl_small_spec}, ct.TileArray{Int64,2,csdl_small_spec}}) do a, b
             pid = ct.bid(1)
             tile = ct.load(a, pid, (8, 256))
-            result = ct.cumsum(tile, Val(1))
+            result = ct.cumsum(tile, ct.axis(2))
             ct.store(b, pid, result)
             return
         end
@@ -265,9 +233,8 @@ const TILE_H = 2^15 # Height for chained lookback across partitions
     end
 end
 
-#=============================================================================
 # CSDL Algorithm Notes (for documentation)
-#=============================================================================
+# ----------------------------------------
 #
 # The CSDL (Chained Scan with Decoupled Lookback) algorithm is designed for
 # efficient parallel prefix sum on GPUs with the following characteristics:

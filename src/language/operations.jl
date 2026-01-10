@@ -14,7 +14,7 @@
  Load/Store
 =============================================================================#
 
-public bid, num_blocks, num_tiles, load, store, gather, scatter
+public bid, num_blocks, num_tiles, axis, load, store, gather, scatter
 
 """
 Padding mode for load operations.
@@ -43,6 +43,24 @@ Returns 1-indexed block ID.
 Get the grid size along the given axis (1=x, 2=y, 3=z).
 """
 @inline num_blocks(axis::Integer) = Intrinsics.get_num_tile_blocks(axis - One())
+
+"""
+    axis(i::Integer) -> Val{i-1}
+
+Return a compile-time axis selector for tile operations.
+Axis indices are 1-based (axis(1) = first dimension, axis(2) = second, etc.).
+Internally converts to 0-based for Tile IR.
+
+Use this instead of raw `Val` for self-documenting code.
+
+# Examples
+```julia
+ct.cumsum(tile, ct.axis(1))   # Scan along first axis
+ct.cumsum(tile, ct.axis(2))   # Scan along second axis
+ct.scan(tile, ct.axis(1), :add)
+```
+"""
+@inline axis(i::Integer) = Val(i - One())
 
 """
     num_tiles(arr::TileArray, axis::Integer, shape::NTuple{M, Int}) -> Int32

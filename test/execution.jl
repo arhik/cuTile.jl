@@ -445,7 +445,7 @@ end
             tile_a = ct.load(a, (bid, 1), (4, 4))
             tile_b = ct.load(b, (bid, 1), (4, 4))
             # Concatenate along first axis -> (8, 4)
-            combined = ct.cat((tile_a, tile_b), Val(1))
+            combined = ct.cat((tile_a, tile_b), ct.axis(1))
             ct.store(c, (bid, 1), combined)
             return
         end

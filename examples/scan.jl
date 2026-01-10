@@ -13,7 +13,7 @@ function cumsum_1d_kernel(a::ct.TileArray{Float32,1}, b::ct.TileArray{Float32,1}
                           tile_size::ct.Constant{Int})
     bid = ct.bid(1)
     tile = ct.load(a, bid, (tile_size[],))
-    result = ct.cumsum(tile, Val(1))  # Axis 1
+    result = ct.cumsum(tile, ct.axis(1))
     ct.store(b, bid, result)
     return
 end
@@ -24,7 +24,7 @@ function cumsum_2d_kernel(a::ct.TileArray{Float32,2}, b::ct.TileArray{Float32,2}
     bid_x = ct.bid(1)
     bid_y = ct.bid(2)
     tile = ct.load(a, (bid_x, bid_y), (tile_y[], tile_x[]))
-    result = ct.cumsum(tile, Val(2))  # Axis 2
+    result = ct.cumsum(tile, ct.axis(2))
     ct.store(b, (bid_x, bid_y), result)
     return
 end
@@ -34,7 +34,7 @@ function cumprod_1d_kernel(a::ct.TileArray{Float32,1}, b::ct.TileArray{Float32,1
                            tile_size::ct.Constant{Int})
     bid = ct.bid(1)
     tile = ct.load(a, bid, (tile_size[],))
-    result = ct.cumprod(tile, Val(1))  # Axis 1
+    result = ct.cumprod(tile, ct.axis(1))
     ct.store(b, bid, result)
     return
 end
@@ -45,7 +45,7 @@ function show_scan_ir()
     input = ct.TileArray(CUDA.zeros(Float32, 1024))
     output = ct.TileArray(CUDA.zeros(Float32, 1024))
     ir = ct.code_tiled(Tuple{typeof(input), typeof(output)}) do a, b
-        ct.store(b, ct.bid(1), ct.cumsum(ct.load(a, ct.bid(1), (1024,)), Val(1)))
+        ct.store(b, ct.bid(1), ct.cumsum(ct.load(a, ct.bid(1), (1024,)), ct.axis(1)))
         return
     end
     println(ir)
