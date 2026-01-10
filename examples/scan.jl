@@ -50,25 +50,31 @@ function cumsum_csdl_phase1(input::ct.TileArray{Float32,1}, output::ct.TileArray
     return
 end
 
-# CSDL phase 2: Decoupled lookback to accumulate previous tile sums
-# For bid == 1: loop never runs, prev_sum = 0, tile unchanged
-# For bid > 1: accumulates all previous tile sums
+# CSDL phase 2: Decoupled lookback using while loop
+# For bid=1: k >= bid_i is true immediately, loop never runs, prev_sum=0
+# For bid=2: k=1, 1 >= 2 false, process tile 1, k=2, 2 >= 2 true, done
+# For bid=3: k=1, process, k=2, process, k=3, done
 function cumsum_csdl_phase2(output::ct.TileArray{Float32,1},
                             tile_sums::ct.TileArray{Float32,1},
-                            num_tiles::ct.Constant{Int},
-                            tile_size::ct.Constant{Int})
+                            tile_size::ct.Constant{Int},
+                            num_tiles::ct.Constant{Int})
     bid = ct.bid(1)
+    bid_i = Int32(bid)
 
-    # Accumulate sum of all previous tile sums
-    # Use for loop with break instead of while
+    # Accumulate previous tile sums using while loop (per README)
     prev_sum = ct.zeros((tile_size[],), Float32)
-    for k in Int32(1):Int32(32)  # Max 32 iterations
-        # Break if we've accumulated enough (k >= bid)
-        if k >= bid
-            break
+    k = Int32(1)
+    done = Int32(0)
+    while done == Int32(0)
+        # Check if we've reached/passed bid
+        if k >= bid_i
+            done = Int32(1)
+        else
+            # Accumulate tile sum k
+            tile_sum_k = ct.load(tile_sums, (k,), (1,))
+            prev_sum = prev_sum + tile_sum_k
+            k = k + Int32(1)
         end
-        tile_sum_k = ct.load(tile_sums, (k,), (1,))
-        prev_sum = prev_sum + tile_sum_k
     end
 
     # Add accumulated sum to current tile
@@ -85,7 +91,7 @@ function cumsum_csdl(input::CuArray{Float32,1}, tile_size::Int=256)
     output = CUDA.zeros(Float32, n)
     tile_sums = CUDA.zeros(Float32, num_tiles)
     CUDA.@sync ct.launch(cumsum_csdl_phase1, num_tiles, input, output, tile_sums, ct.Constant(tile_size))
-    CUDA.@sync ct.launch(cumsum_csdl_phase2, num_tiles, output, tile_sums, ct.Constant(num_tiles), ct.Constant(tile_size))
+    CUDA.@sync ct.launch(cumsum_csdl_phase2, num_tiles, output, tile_sums, ct.Constant(tile_size), ct.Constant(num_tiles))
     return output
 end
 
