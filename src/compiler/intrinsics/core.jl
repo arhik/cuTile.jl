@@ -575,9 +575,10 @@ end
 
     Parallel prefix scan along specified dimension.
     fn_type=:add for cumulative sum, :mul for cumulative product.
+    reverse=false for forward scan, true for reverse scan.
     Compiled to cuda_tile.scan.
     """
-    @noinline function scan(tile::Tile{T, S}, ::Val{axis}, fn::Symbol; reverse::Bool=false) where {T, S, axis}
+    @noinline function scan(tile::Tile{T, S}, ::Val{axis}, fn::Symbol, reverse::Bool=false) where {T, S, axis}
         # Scan preserves shape - result has same dimensions as input
         Tile{T, S}()
     end
@@ -688,10 +689,21 @@ function emit_scan!(ctx::CGCtx, args)
     # For cumprod: identity is 1.0
     if fn_type == :add
         identity_val = -0.0  # Negative zero works as additive identity
-        identity = ScanFloatIdentity(identity_val, dtype, elem_type)
     else  # :mul
         identity_val = 1.0
+    end
+
+    # Choose identity type based on element type
+    if elem_type <: AbstractFloat
+        # Use float identity for float types
         identity = ScanFloatIdentity(identity_val, dtype, elem_type)
+    elseif elem_type <: Integer
+        # Use integer identity for integer types
+        identity_val_int = fn_type == :add ? Int64(0) : Int64(1)
+        is_signed = elem_type <: Signed
+        identity = ScanIntegerIdentity(identity_val_int, dtype, elem_type, is_signed)
+    else
+        error("Unsupported element type for scan: $elem_type")
     end
 
     # Emit ScanOp
@@ -699,9 +711,17 @@ function emit_scan!(ctx::CGCtx, args)
         acc, elem = block_args[1], block_args[2]
 
         if fn_type == :add
-            res = encode_AddFOp!(cb, scalar_tile_type, acc, elem)
+            if elem_type <: AbstractFloat
+                res = encode_AddFOp!(cb, scalar_tile_type, acc, elem)
+            else  # Integer types
+                res = encode_AddIOp!(cb, scalar_tile_type, acc, elem)
+            end
         else  # :mul
-            res = encode_MulFOp!(cb, scalar_tile_type, acc, elem)
+            if elem_type <: AbstractFloat
+                res = encode_MulFOp!(cb, scalar_tile_type, acc, elem)
+            else  # Integer types
+                res = encode_MulIOp!(cb, scalar_tile_type, acc, elem)
+            end
         end
 
         encode_YieldOp!(cb, [res])

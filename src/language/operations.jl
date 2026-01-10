@@ -876,16 +876,18 @@ end
 
 # Scan (Prefix Sum) Operations
 
-@inline function scan(tile::Tile{T, S}, ::Val{axis};
+@inline function scan(tile::Tile{T, S}, ::Val{axis},
                       fn::Symbol=:add,
                       reverse::Bool=false) where {T, S, axis}
-    Intrinsics.scan(tile, Val(axis), fn; reverse=reverse)
+    Intrinsics.scan(tile, Val(axis), fn, reverse)
 end
 
-@inline function cumsum(tile::Tile{T, S}, ::Val{axis}; reverse::Bool=false) where {T, S, axis}
-    scan(tile, Val(axis); fn=:add, reverse=reverse)
+@inline function cumsum(tile::Tile{T, S}, ::Val{axis},
+                        reverse::Bool=false) where {T, S, axis}
+    scan(tile, Val(axis), :add, reverse)
 end
 
-@inline function cumprod(tile::Tile{T, S}, ::Val{axis}; reverse::Bool=false) where {T, S, axis}
-    scan(tile, Val(axis); fn=:mul, reverse=reverse)
+@inline function cumprod(tile::Tile{T, S}, ::Val{axis},
+                         reverse::Bool=false) where {T, S, axis}
+    scan(tile, Val(axis), :mul, reverse)
 end

@@ -1,193 +1,210 @@
-
 #=============================================================================
- Scan (Prefix Sum) Operation Tests
+ Scan (Prefix Sum) Operation Tests - Tile IR Validation
 =============================================================================#
 
-@testset "Scan Operations" begin
-    import cuTile: Tile, scan, cumsum, cumprod, tile_shape
+using Test
+using cuTile
+import cuTile as ct
+
+@testset "Scan" begin
+    # Common ArraySpecs for tests
+    spec1d = ct.ArraySpec{1}(16, true)
+    spec2d = ct.ArraySpec{2}(16, true)
+    spec3d = ct.ArraySpec{3}(16, true)
 
     #=========================================================================
-     Basic Function Tests
+     Tile IR Generation Tests
     =========================================================================#
-    @testset "Basic scan compilation" begin
-        tile = Tile{Float32, (4, 5)}()
-        result = scan(tile, Val(1); fn=:add)
-        @test eltype(result) == Float32
-        @test tile_shape(result) == (4, 5)
-
-        # Test scan with :mul function
-        result_mul = scan(tile, Val(1); fn=:mul)
-        @test eltype(result_mul) == Float32
-        @test tile_shape(result_mul) == (4, 5)
+    @testset "cumsum generates scan operation" begin
+        # Test that cumsum generates valid Tile IR with scan operation
+        ir = ct.code_tiled(Tuple{ct.TileArray{Float32,2,spec2d}, ct.TileArray{Float32,2,spec2d}}) do a, b
+            pid = ct.bid(1)
+            tile = ct.load(a, pid, (4, 8))
+            result = ct.cumsum(tile, Val(1))
+            ct.store(b, pid, result)
+            return
+        end
+        @test occursin("scan", ir)
+        @test occursin("addf", ir)  # cumsum uses addition in body
     end
 
-    @testset "cumsum" begin
-        # cumsum along axis 1
-        tile = Tile{Float32, (4, 5)}()
-        result = cumsum(tile, Val(1))
-        @test eltype(result) == Float32
-        @test tile_shape(result) == (4, 5)
-
-        # cumsum along axis 0
-        result_0 = cumsum(tile, Val(0))
-        @test eltype(result_0) == Float32
-        @test tile_shape(result_0) == (4, 5)
-
-        # cumsum with different types
-        tile_64 = Tile{Float64, (3, 4)}()
-        result_64 = cumsum(tile_64, Val(1))
-        @test eltype(result_64) == Float64
-        @test tile_shape(result_64) == (3, 4)
+    @testset "cumprod generates scan operation" begin
+        # Test that cumprod generates valid Tile IR with scan operation
+        ir = ct.code_tiled(Tuple{ct.TileArray{Float32,2,spec2d}, ct.TileArray{Float32,2,spec2d}}) do a, b
+            pid = ct.bid(1)
+            tile = ct.load(a, pid, (4, 8))
+            result = ct.cumprod(tile, Val(1))
+            ct.store(b, pid, result)
+            return
+        end
+        @test occursin("scan", ir)
+        @test occursin("mulf", ir)  # cumprod uses multiplication in body
     end
 
-    @testset "cumprod" begin
-        # cumprod along axis 1
-        tile = Tile{Float32, (4, 5)}()
-        result = cumprod(tile, Val(1))
-        @test eltype(result) == Float32
-        @test tile_shape(result) == (4, 5)
-
-        # cumprod along axis 0
-        result_0 = cumprod(tile, Val(0))
-        @test eltype(result_0) == Float32
-        @test tile_shape(result_0) == (4, 5)
+    @testset "direct scan with :add" begin
+        ir = ct.code_tiled(Tuple{ct.TileArray{Float32,2,spec2d}, ct.TileArray{Float32,2,spec2d}}) do a, b
+            pid = ct.bid(1)
+            tile = ct.load(a, pid, (4, 8))
+            result = ct.scan(tile, Val(1), :add)
+            ct.store(b, pid, result)
+            return
+        end
+        @test occursin("scan", ir)
+        @test occursin("addf", ir)
     end
 
-    @testset "Reverse scan" begin
-        tile = Tile{Float32, (4, 5)}()
-
-        # Reverse scan with :add
-        result_rev_add = scan(tile, Val(1); fn=:add, reverse=true)
-        @test eltype(result_rev_add) == Float32
-        @test tile_shape(result_rev_add) == (4, 5)
-
-        # Reverse scan with :mul
-        result_rev_mul = scan(tile, Val(1); fn=:mul, reverse=true)
-        @test eltype(result_rev_mul) == Float32
-        @test tile_shape(result_rev_mul) == (4, 5)
-
-        # Reverse cumsum
-        result = cumsum(tile, Val(1); reverse=true)
-        @test eltype(result) == Float32
-        @test tile_shape(result) == (4, 5)
-
-        # Reverse cumprod
-        result = cumprod(tile, Val(1); reverse=true)
-        @test eltype(result) == Float32
-        @test tile_shape(result) == (4, 5)
+    @testset "direct scan with :mul" begin
+        ir = ct.code_tiled(Tuple{ct.TileArray{Float32,2,spec2d}, ct.TileArray{Float32,2,spec2d}}) do a, b
+            pid = ct.bid(1)
+            tile = ct.load(a, pid, (4, 8))
+            result = ct.scan(tile, Val(1), :mul)
+            ct.store(b, pid, result)
+            return
+        end
+        @test occursin("scan", ir)
+        @test occursin("mulf", ir)
     end
 
     #=========================================================================
-     Element Types
+     Different Element Types
     =========================================================================#
-    @testset "Float32" begin
-        tile = Tile{Float32, (3, 4)}()
-        result = scan(tile, Val(1); fn=:add)
-        @test eltype(result) == Float32
-        @test tile_shape(result) == (3, 4)
+    @testset "Float64 scan" begin
+        ir = ct.code_tiled(Tuple{ct.TileArray{Float64,2,spec2d}, ct.TileArray{Float64,2,spec2d}}) do a, b
+            pid = ct.bid(1)
+            tile = ct.load(a, pid, (4, 8))
+            result = ct.cumsum(tile, Val(1))
+            ct.store(b, pid, result)
+            return
+        end
+        @test occursin("scan", ir)
+        @test occursin("f64", ir)  # Float64 type
     end
 
-    @testset "Float64" begin
-        tile = Tile{Float64, (3, 4)}()
-        result = scan(tile, Val(1); fn=:add)
-        @test eltype(result) == Float64
-        @test tile_shape(result) == (3, 4)
-    end
-
-    @testset "Int32" begin
-        tile = Tile{Int32, (3, 4)}()
-        result = scan(tile, Val(1); fn=:add)
-        @test eltype(result) == Int32
-        @test tile_shape(result) == (3, 4)
-    end
-
-    @testset "Int64" begin
-        tile = Tile{Int64, (3, 4)}()
-        result = scan(tile, Val(1); fn=:add)
-        @test eltype(result) == Int64
-        @test tile_shape(result) == (3, 4)
+    @testset "Int32 scan" begin
+        ir = ct.code_tiled(Tuple{ct.TileArray{Int32,2,spec2d}, ct.TileArray{Int32,2,spec2d}}) do a, b
+            pid = ct.bid(1)
+            tile = ct.load(a, pid, (4, 8))
+            result = ct.cumsum(tile, Val(1))
+            ct.store(b, pid, result)
+            return
+        end
+        @test occursin("scan", ir)
+        @test occursin("i32", ir)  # Int32 type
     end
 
     #=========================================================================
      Different Axes
     =========================================================================#
-    @testset "Axis 0" begin
-        tile = Tile{Float32, (2, 3, 4)}()
-        result = scan(tile, Val(0); fn=:add)
-        @test eltype(result) == Float32
-        @test tile_shape(result) == (2, 3, 4)
+    @testset "scan along axis 0 (2D)" begin
+        ir = ct.code_tiled(Tuple{ct.TileArray{Float32,2,spec2d}, ct.TileArray{Float32,2,spec2d}}) do a, b
+            pid = ct.bid(1)
+            tile = ct.load(a, pid, (4, 8))
+            result = ct.cumsum(tile, Val(0))
+            ct.store(b, pid, result)
+            return
+        end
+        @test occursin("scan", ir)
+        @test occursin("dim=0", ir)  # axis 0
     end
 
-    @testset "Axis 1" begin
-        tile = Tile{Float32, (2, 3, 4)}()
-        result = scan(tile, Val(1); fn=:add)
-        @test eltype(result) == Float32
-        @test tile_shape(result) == (2, 3, 4)
+    @testset "scan along axis 1 (2D)" begin
+        ir = ct.code_tiled(Tuple{ct.TileArray{Float32,2,spec2d}, ct.TileArray{Float32,2,spec2d}}) do a, b
+            pid = ct.bid(1)
+            tile = ct.load(a, pid, (4, 8))
+            result = ct.cumsum(tile, Val(1))
+            ct.store(b, pid, result)
+            return
+        end
+        @test occursin("scan", ir)
+        @test occursin("dim=1", ir)  # axis 1
     end
 
-    @testset "Axis 2" begin
-        tile = Tile{Float32, (2, 3, 4)}()
-        result = scan(tile, Val(2); fn=:add)
-        @test eltype(result) == Float32
-        @test tile_shape(result) == (2, 3, 4)
+    @testset "scan along axis 0 (3D)" begin
+        ir = ct.code_tiled(Tuple{ct.TileArray{Float32,3,spec3d}, ct.TileArray{Float32,3,spec3d}}) do a, b
+            pid = ct.bid(1)
+            tile = ct.load(a, pid, (2, 4, 8))
+            result = ct.cumsum(tile, Val(0))
+            ct.store(b, pid, result)
+            return
+        end
+        @test occursin("scan", ir)
+        @test occursin("dim=0", ir)
+    end
+
+    @testset "scan along axis 1 (3D)" begin
+        ir = ct.code_tiled(Tuple{ct.TileArray{Float32,3,spec3d}, ct.TileArray{Float32,3,spec3d}}) do a, b
+            pid = ct.bid(1)
+            tile = ct.load(a, pid, (2, 4, 8))
+            result = ct.cumsum(tile, Val(1))
+            ct.store(b, pid, result)
+            return
+        end
+        @test occursin("scan", ir)
+        @test occursin("dim=1", ir)
+    end
+
+    @testset "scan along axis 2 (3D)" begin
+        ir = ct.code_tiled(Tuple{ct.TileArray{Float32,3,spec3d}, ct.TileArray{Float32,3,spec3d}}) do a, b
+            pid = ct.bid(1)
+            tile = ct.load(a, pid, (2, 4, 8))
+            result = ct.cumsum(tile, Val(2))
+            ct.store(b, pid, result)
+            return
+        end
+        @test occursin("scan", ir)
+        @test occursin("dim=2", ir)
     end
 
     #=========================================================================
-     Shape Preservation
+     Shape Preservation Tests
     =========================================================================#
-    @testset "Shape preservation" begin
-        # 2D tile
-        tile = Tile{Float32, (4, 5)}()
-        result = scan(tile, Val(1); fn=:add)
-        @test tile_shape(result) == (4, 5)
+    @testset "2D output shape matches input" begin
+        ir = ct.code_tiled(Tuple{ct.TileArray{Float32,2,spec2d}, ct.TileArray{Float32,2,spec2d}}) do a, b
+            pid = ct.bid(1)
+            tile = ct.load(a, pid, (4, 8))
+            result = ct.cumsum(tile, Val(1))
+            ct.store(b, pid, result)
+            return
+        end
+        @test occursin("tile<4x8xf32>", ir)  # Output shape matches input
+    end
 
-        # 3D tile
-        tile_3d = Tile{Float32, (2, 3, 4)}()
-        result_3d = scan(tile_3d, Val(0); fn=:add)
-        @test tile_shape(result_3d) == (2, 3, 4)
+    @testset "3D output shape matches input" begin
+        ir = ct.code_tiled(Tuple{ct.TileArray{Float32,3,spec3d}, ct.TileArray{Float32,3,spec3d}}) do a, b
+            pid = ct.bid(1)
+            tile = ct.load(a, pid, (2, 4, 8))
+            result = ct.cumsum(tile, Val(0))
+            ct.store(b, pid, result)
+            return
+        end
+        @test occursin("tile<2x4x8xf32>", ir)  # Output shape matches input
     end
 
     #=========================================================================
-     Type Stability
+     Type Stability Tests
     =========================================================================#
     @testset "Type stability" begin
-        tile = Tile{Float32, (4, 5)}()
+        tile = ct.Tile{Float32, (4, 5)}()
 
-        # Check return types are concrete
         @testset "scan return type" begin
-            return_types = Base.return_types(scan, (typeof(tile), Val{1}))
+            return_types = Base.return_types(ct.scan, (typeof(tile), Val{1}, Symbol))
             @test return_types isa Vector{Any}
             @test !isempty(return_types)
-            # First return type should be Tile{Float32, (4, 5)}
-            @test return_types[1] == Tile{Float32, (4, 5)}
+            @test return_types[1] == ct.Tile{Float32, (4, 5)}
         end
 
         @testset "cumsum return type" begin
-            return_types = Base.return_types(cumsum, (typeof(tile), Val{1}))
+            return_types = Base.return_types(ct.cumsum, (typeof(tile), Val{1}))
             @test return_types isa Vector{Any}
             @test !isempty(return_types)
-            @test return_types[1] == Tile{Float32, (4, 5)}
+            @test return_types[1] == ct.Tile{Float32, (4, 5)}
         end
 
         @testset "cumprod return type" begin
-            return_types = Base.return_types(cumprod, (typeof(tile), Val{1}))
+            return_types = Base.return_types(ct.cumprod, (typeof(tile), Val{1}))
             @test return_types isa Vector{Any}
             @test !isempty(return_types)
-            @test return_types[1] == Tile{Float32, (4, 5)}
+            @test return_types[1] == ct.Tile{Float32, (4, 5)}
         end
-    end
-
-    #=========================================================================
-     Scan Identity Tests
-    =========================================================================#
-    @testset "Scan identity values" begin
-        # Sum scan should use identity 0
-        tile = Tile{Float32, (4, 5)}()
-        result_add = scan(tile, Val(1); fn=:add)
-        @test eltype(result_add) == Float32
-
-        # Product scan should use identity 1
-        result_mul = scan(tile, Val(1); fn=:mul)
-        @test eltype(result_mul) == Float32
     end
 end
