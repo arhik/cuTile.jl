@@ -327,7 +327,10 @@ function main()
     println("Compute Capability: $compute_cap")
     println()
 
-    if compute_cap < (9, 0)
+    # Tile IR requires sm_90+ (Ampere, Ada Lovelace, Hopper, or newer)
+    # Blackwell (RTX 50xx series) has compute capability 10.x which is fully supported
+    min_version = v"9.0"
+    if compute_cap < min_version
         println("WARNING: Tile IR requires sm_90+ (Ampere or newer)")
         println("This GPU may not support Tile IR execution.")
         println()
