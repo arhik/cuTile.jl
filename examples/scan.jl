@@ -51,13 +51,14 @@ function cumsum_csdl_phase1(a::ct.TileArray{Float32,1}, b::ct.TileArray{Float32,
 end
 
 # CSDL phase 2: Decoupled lookback to accumulate previous tile sums
+# No if/return - uses while loop predication (first tile: k < 1 never runs, prev_sum = 0)
 function cumsum_csdl_phase2(b::ct.TileArray{Float32,1},
                             tile_sums::ct.TileArray{Float32,1},
                             tile_size::ct.Constant{Int})
     bid = ct.bid(1)
-    if bid == Int32(1)
-        return
-    end
+
+    # Accumulate sum of all previous tile sums
+    # For bid=1: k < 1 is false, loop never runs, prev_sum = 0
     prev_sum = ct.zeros((tile_size[],), Float32)
     k = Int32(1)
     while k < bid
@@ -65,6 +66,8 @@ function cumsum_csdl_phase2(b::ct.TileArray{Float32,1},
         prev_sum = prev_sum + tile_sum_k
         k += Int32(1)
     end
+
+    # Add accumulated sum to current tile
     tile = ct.load(b, bid, (tile_size[],))
     result = tile + prev_sum
     ct.store(b, bid, result)
