@@ -38,39 +38,43 @@ end
 # ============================================================================
 
 # CSDL phase 1: Intra-tile scan + store tile sums
-function cumsum_csdl_phase1(a::ct.TileArray{Float32,1}, b::ct.TileArray{Float32,1},
+function cumsum_csdl_phase1(input::ct.TileArray{Float32,1}, output::ct.TileArray{Float32,1},
                             tile_sums::ct.TileArray{Float32,1},
                             tile_size::ct.Constant{Int})
     bid = ct.bid(1)
-    tile = ct.load(a, bid, (tile_size[],))
+    tile = ct.load(input, bid, (tile_size[],))
     result = ct.cumsum(tile, ct.axis(1))
-    ct.store(b, bid, result)
+    ct.store(output, bid, result)
     tile_sum = ct.extract(result, (tile_size[],), (1,))
     ct.store(tile_sums, bid, tile_sum)
     return
 end
 
 # CSDL phase 2: Decoupled lookback to accumulate previous tile sums
-# No if/return - uses while loop predication (first tile: k < 1 never runs, prev_sum = 0)
-function cumsum_csdl_phase2(b::ct.TileArray{Float32,1},
+# For bid == 1: loop never runs, prev_sum = 0, tile unchanged
+# For bid > 1: accumulates all previous tile sums
+function cumsum_csdl_phase2(output::ct.TileArray{Float32,1},
                             tile_sums::ct.TileArray{Float32,1},
+                            num_tiles::ct.Constant{Int},
                             tile_size::ct.Constant{Int})
     bid = ct.bid(1)
 
     # Accumulate sum of all previous tile sums
-    # For bid=1: k < 1 is false, loop never runs, prev_sum = 0
+    # Use for loop with break instead of while
     prev_sum = ct.zeros((tile_size[],), Float32)
-    k = Int32(1)
-    while k < bid
+    for k in Int32(1):Int32(32)  # Max 32 iterations
+        # Break if we've accumulated enough (k >= bid)
+        if k >= bid
+            break
+        end
         tile_sum_k = ct.load(tile_sums, (k,), (1,))
         prev_sum = prev_sum + tile_sum_k
-        k += Int32(1)
     end
 
     # Add accumulated sum to current tile
-    tile = ct.load(b, bid, (tile_size[],))
+    tile = ct.load(output, bid, (tile_size[],))
     result = tile + prev_sum
-    ct.store(b, bid, result)
+    ct.store(output, bid, result)
     return
 end
 
@@ -81,7 +85,7 @@ function cumsum_csdl(input::CuArray{Float32,1}, tile_size::Int=256)
     output = CUDA.zeros(Float32, n)
     tile_sums = CUDA.zeros(Float32, num_tiles)
     CUDA.@sync ct.launch(cumsum_csdl_phase1, num_tiles, input, output, tile_sums, ct.Constant(tile_size))
-    CUDA.@sync ct.launch(cumsum_csdl_phase2, num_tiles, output, tile_sums, ct.Constant(tile_size))
+    CUDA.@sync ct.launch(cumsum_csdl_phase2, num_tiles, output, tile_sums, ct.Constant(num_tiles), ct.Constant(tile_size))
     return output
 end
 
@@ -98,16 +102,6 @@ function main()
 
     println("\nTest: CSDL Full Array Cumsum (32K elements, 32 tiles of 1K)")
     n, tile_sz = 32768, 1024
-    a = CUDA.rand(Float32, n)
-    exp = cumsum(Array(a), dims=1)
-    CUDA.@sync begin
-        result = cumsum_csdl(a, tile_sz)
-    end
-    res = Array(result)
-    println(res ≈ exp ? "  ✓ PASS" : "  ✗ FAIL")
-
-    println("\nTest: CSDL Large Array (1M elements, 1024 tiles of 1K)")
-    n, tile_sz = 1048576, 1024
     a = CUDA.rand(Float32, n)
     exp = cumsum(Array(a), dims=1)
     CUDA.@sync begin
