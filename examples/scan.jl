@@ -323,10 +323,11 @@ function main()
     end
 
     println("GPU: $(CUDA.name(CUDA.device()))")
-    println("Compute Capability: $(CUDA.capability(Int))")
+    compute_cap = CUDA.capability(CUDA.device())
+    println("Compute Capability: $compute_cap")
     println()
 
-    if CUDA.capability(Int) < (9, 0)
+    if compute_cap < (9, 0)
         println("WARNING: Tile IR requires sm_90+ (Ampere or newer)")
         println("This GPU may not support Tile IR execution.")
         println()
