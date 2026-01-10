@@ -14,6 +14,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 using CUDA
+using Printf
 using cuTile
 import cuTile as ct
 
