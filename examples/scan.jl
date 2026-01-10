@@ -22,10 +22,11 @@ end
 
 function show_block_cumsum_example()
     println("\n=== Block-level Cumsum (single tile) ===")
-    n, sz = 1024, 256
+    # n == tile_size for single-tile test
+    n, sz = 256, 256
     a = CUDA.rand(Float32, n)
     b = CUDA.zeros(Float32, n)
-    CUDA.@sync ct.launch(block_cumsum_kernel, cld(n, sz), a, b, ct.Constant(sz))
+    CUDA.@sync ct.launch(block_cumsum_kernel, 1, a, b, ct.Constant(sz))
     res = Array(b)
     exp = cumsum(Array(a), dims=1)
     println(res ≈ exp ? "  ✓ PASS" : "  ✗ FAIL")
@@ -58,20 +59,16 @@ function cumsum_csdl_phase2(output::ct.TileArray{Float32,1},
                             tile_size::ct.Constant{Int})
     bid = ct.bid(1)
 
-    # Accumulate sum of previous tile sums
-    # For bid=1: k < bid is false, loop never runs, prev_sum = 0
-    # For bid>1: accumulates all previous tile sums
     prev_sum = ct.zeros((tile_size[],), Float32)
     k = Int32(1)
     while k < bid
         tile_sum_k = ct.load(tile_sums, (k,), (1,))
-        prev_sum = prev_sum .+ tile_sum_k  # .+ for broadcasting (1024,) + (1,)
+        prev_sum = prev_sum .+ tile_sum_k
         k += Int32(1)
     end
 
-    # Add accumulated sum to current tile
     tile = ct.load(output, bid, (tile_size[],))
-    result = tile .+ prev_sum  # .+ for broadcasting
+    result = tile .+ prev_sum
     ct.store(output, bid, result)
     return nothing
 end
