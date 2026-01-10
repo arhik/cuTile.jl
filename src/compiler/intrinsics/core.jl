@@ -709,27 +709,27 @@ function emit_scan!(ctx::CGCtx, args)
     # Emit ScanOp
     results = encode_ScanOp!(cb, [output_tile_type], [input_tv.v], axis, reverse, [identity], [scalar_tile_type]) do block_args
         acc, elem = block_args[1], block_args[2]
-
-        if fn_type == :add
-            if elem_type <: AbstractFloat
-                res = encode_AddFOp!(cb, scalar_tile_type, acc, elem)
-            else  # Integer types
-                res = encode_AddIOp!(cb, scalar_tile_type, acc, elem)
-            end
+        res = if fn_type == :add
+            encode_scan_add(cb, scalar_tile_type, acc, elem, elem_type)
         else  # :mul
-            if elem_type <: AbstractFloat
-                res = encode_MulFOp!(cb, scalar_tile_type, acc, elem)
-            else  # Integer types
-                res = encode_MulIOp!(cb, scalar_tile_type, acc, elem)
-            end
+            encode_scan_mul(cb, scalar_tile_type, acc, elem, elem_type)
         end
-
         encode_YieldOp!(cb, [res])
     end
 
     CGVal(results[1], output_tile_type, Tile{elem_type, Tuple(output_shape)}, output_shape)
 end
 
+# Helper functions for scan body operations with type dispatch
+encode_scan_add(cb, scalar_tile_type, acc, elem, ::Type{T}) where T <: AbstractFloat =
+    encode_AddFOp!(cb, scalar_tile_type, acc, elem)
+encode_scan_add(cb, scalar_tile_type, acc, elem, ::Type{T}) where T <: Integer =
+    encode_AddIOp!(cb, scalar_tile_type, acc, elem)
+
+encode_scan_mul(cb, scalar_tile_type, acc, elem, ::Type{T}) where T <: AbstractFloat =
+    encode_MulFOp!(cb, scalar_tile_type, acc, elem)
+encode_scan_mul(cb, scalar_tile_type, acc, elem, ::Type{T}) where T <: Integer =
+    encode_MulIOp!(cb, scalar_tile_type, acc, elem)
 
 
 ## cuda_tile.reshape
