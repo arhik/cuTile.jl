@@ -55,7 +55,6 @@ end
 
 n = length(a)
 num_tiles = cld(n, sz)
-output = CUDA.zeros(Float32, n)
 tile_sums = CUDA.zeros(Float32, num_tiles)
 CUDA.@sync ct.launch(cumsum_csdl_phase1, num_tiles, a, b, tile_sums, ct.Constant(sz))
 CUDA.@sync ct.launch(cumsum_csdl_phase2, num_tiles, b, tile_sums, ct.Constant(sz))

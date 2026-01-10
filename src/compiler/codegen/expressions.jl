@@ -72,6 +72,9 @@ function emit_call!(ctx::CGCtx, expr::Expr, @nospecialize(result_type))
     if func === Core.getfield
         tv = emit_getfield!(ctx, call_args, result_type)
         tv !== nothing && return tv
+    elseif func === Core.getglobal
+        # Julia 1.10+ uses getglobal for module global access - resolve at compile time
+        return nothing
     elseif func === Base.getindex
         tv = emit_getindex!(ctx, call_args, result_type)
         tv !== nothing && return tv
