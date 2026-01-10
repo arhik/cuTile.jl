@@ -39,16 +39,24 @@ function cumprod_1d_kernel(a::ct.TileArray{Float32,1}, b::ct.TileArray{Float32,1
     return
 end
 
-# Show generated Tile IR
+# Show generated Tile IR using do-block with concrete ArraySpec
 function show_scan_ir()
     println("\n=== Generated Tile IR ===")
-    input = ct.TileArray(CUDA.zeros(Float32, 1024))
-    output = ct.TileArray(CUDA.zeros(Float32, 1024))
+    # Use concrete ArraySpec (required for code_tiled do-block)
+    spec = ct.ArraySpec{1}(128, true)
+    input = ct.TileArray{Float32,1,spec}(CUDA.zeros(Float32, 128))
+    output = ct.TileArray{Float32,1,spec}(CUDA.zeros(Float32, 128))
     ir = ct.code_tiled(Tuple{typeof(input), typeof(output)}) do a, b
-        ct.store(b, ct.bid(1), ct.cumsum(ct.load(a, ct.bid(1), (1024,)), ct.axis(1)))
+        pid = ct.bid(1)
+        tile = ct.load(a, pid, (128,))
+        result = ct.cumsum(tile, ct.axis(1))
+        ct.store(b, pid, result)
         return
     end
     println(ir)
+    if occursin("scan", ir)
+        println("  scan operation found in IR")
+    end
     println("=== End IR ===")
     return ir
 end
