@@ -5,6 +5,21 @@
 =============================================================================#
 
 """
+    dtype_for_type(tt, elem_type)
+
+Get the appropriate dtype for a Julia type.
+- Bool uses I1 type
+- Other types use their corresponding Tile dtype
+"""
+function dtype_for_type(tt::TypeTable, elem_type::Type)
+    if elem_type === Bool || (elem_type <: Tile && elem_type.parameters[1] === Bool)
+        return I1(tt)
+    else
+        return julia_to_tile_dtype!(tt, elem_type <: Tile ? elem_type.parameters[1] : elem_type)
+    end
+end
+
+"""
     emit_binop!(ctx, args, encoder; kwargs...)
 
 Binary operation emitter. Forwards kwargs to the encoder.
@@ -409,11 +424,7 @@ function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.andi), args)
     elem_type = unwrap_type(lhs.jltype)
 
     # Determine dtype - Bool uses I1, integers use their respective types
-    dtype = if elem_type === Bool || (elem_type <: Tile && elem_type.parameters[1] === Bool)
-        I1(tt)
-    else
-        julia_to_tile_dtype!(tt, elem_type <: Tile ? elem_type.parameters[1] : elem_type)
-    end
+    dtype = dtype_for_type(tt, elem_type)
     result_type_id = tile_type!(tt, dtype, result_shape)
 
     result = encode_AndIOp!(cb, result_type_id, lhs_v, rhs_v)
@@ -438,11 +449,7 @@ function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.ori), args)
     result_shape = lhs.shape
     elem_type = unwrap_type(lhs.jltype)
 
-    dtype = if elem_type === Bool || (elem_type <: Tile && elem_type.parameters[1] === Bool)
-        I1(tt)
-    else
-        julia_to_tile_dtype!(tt, elem_type <: Tile ? elem_type.parameters[1] : elem_type)
-    end
+    dtype = dtype_for_type(tt, elem_type)
     result_type_id = tile_type!(tt, dtype, result_shape)
 
     result = encode_OrIOp!(cb, result_type_id, lhs_v, rhs_v)
@@ -467,11 +474,7 @@ function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.xori), args)
     result_shape = lhs.shape
     elem_type = unwrap_type(lhs.jltype)
 
-    dtype = if elem_type === Bool || (elem_type <: Tile && elem_type.parameters[1] === Bool)
-        I1(tt)
-    else
-        julia_to_tile_dtype!(tt, elem_type <: Tile ? elem_type.parameters[1] : elem_type)
-    end
+    dtype = dtype_for_type(tt, elem_type)
     result_type_id = tile_type!(tt, dtype, result_shape)
 
     result = encode_XOrIOp!(cb, result_type_id, lhs_v, rhs_v)

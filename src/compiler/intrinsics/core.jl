@@ -627,20 +627,22 @@ function emit_reduce!(ctx::CGCtx, args, reduce_fn::Symbol)
     # Emit ReduceOp
     results = encode_ReduceOp!(cb, [output_tile_type], [input_tv.v], axis, [identity], [scalar_tile_type]) do block_args
         acc, elem = block_args[1], block_args[2]
-
-        if reduce_fn == :add
-            res = encode_AddFOp!(cb, scalar_tile_type, acc, elem)
-        elseif reduce_fn == :max
-            res = encode_MaxFOp!(cb, scalar_tile_type, acc, elem)
-        else
-            error("Unsupported reduction function: $reduce_fn")
-        end
-
+        res = encode_reduce_body(cb, scalar_tile_type, acc, elem, Val(reduce_fn), elem_type)
         encode_YieldOp!(cb, [res])
     end
 
     CGVal(results[1], output_tile_type, Tile{elem_type, Tuple(output_shape)}, output_shape)
 end
+
+# Dispatch helpers for reduce body operations - dispatch on Val{fn} and elem_type
+encode_reduce_body(cb, type, acc, elem, ::Val{:add}, ::Type{T}) where T <: AbstractFloat =
+    encode_AddFOp!(cb, type, acc, elem)
+encode_reduce_body(cb, type, acc, elem, ::Val{:max}, ::Type{T}) where T <: AbstractFloat =
+    encode_MaxFOp!(cb, type, acc, elem)
+encode_reduce_body(cb, type, acc, elem, ::Val{:add}, ::Type{T}) where T <: Integer =
+    encode_AddIOp!(cb, type, acc, elem)
+encode_reduce_body(cb, type, acc, elem, ::Val{:max}, ::Type{T}) where T <: Integer =
+    encode_MaxIOp!(cb, type, acc, elem)
 
 function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.scan), args)
     emit_scan!(ctx, args)
@@ -709,27 +711,22 @@ function emit_scan!(ctx::CGCtx, args)
     # Emit ScanOp
     results = encode_ScanOp!(cb, [output_tile_type], [input_tv.v], axis, reverse, [identity], [scalar_tile_type]) do block_args
         acc, elem = block_args[1], block_args[2]
-        res = if fn_type == :add
-            encode_scan_add(cb, scalar_tile_type, acc, elem, elem_type)
-        else  # :mul
-            encode_scan_mul(cb, scalar_tile_type, acc, elem, elem_type)
-        end
+        res = encode_scan_body(cb, scalar_tile_type, acc, elem, Val(fn_type), elem_type)
         encode_YieldOp!(cb, [res])
     end
 
     CGVal(results[1], output_tile_type, Tile{elem_type, Tuple(output_shape)}, output_shape)
 end
 
-# Helper functions for scan body operations with type dispatch
-encode_scan_add(cb, scalar_tile_type, acc, elem, ::Type{T}) where T <: AbstractFloat =
-    encode_AddFOp!(cb, scalar_tile_type, acc, elem)
-encode_scan_add(cb, scalar_tile_type, acc, elem, ::Type{T}) where T <: Integer =
-    encode_AddIOp!(cb, scalar_tile_type, acc, elem)
-
-encode_scan_mul(cb, scalar_tile_type, acc, elem, ::Type{T}) where T <: AbstractFloat =
-    encode_MulFOp!(cb, scalar_tile_type, acc, elem)
-encode_scan_mul(cb, scalar_tile_type, acc, elem, ::Type{T}) where T <: Integer =
-    encode_MulIOp!(cb, scalar_tile_type, acc, elem)
+# Dispatch helpers for scan body operations - dispatch on Val{fn} and elem_type
+encode_scan_body(cb, type, acc, elem, ::Val{:add}, ::Type{T}) where T <: AbstractFloat =
+    encode_AddFOp!(cb, type, acc, elem)
+encode_scan_body(cb, type, acc, elem, ::Val{:add}, ::Type{T}) where T <: Integer =
+    encode_AddIOp!(cb, type, acc, elem)
+encode_scan_body(cb, type, acc, elem, ::Val{:mul}, ::Type{T}) where T <: AbstractFloat =
+    encode_MulFOp!(cb, type, acc, elem)
+encode_scan_body(cb, type, acc, elem, ::Val{:mul}, ::Type{T}) where T <: Integer =
+    encode_MulIOp!(cb, type, acc, elem)
 
 
 ## cuda_tile.reshape
