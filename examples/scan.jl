@@ -39,30 +39,17 @@ function cumprod_1d_kernel(a::ct.TileArray{Float32,1}, b::ct.TileArray{Float32,1
     return
 end
 
-# Show generated Tile IR for cumsum kernel
-function show_scan_ir()
-    println("\n=== Generated Tile IR ===")
-    try
-        # Use concrete ArraySpec (required for code_tiled do-block)
-        spec = ct.ArraySpec{1}(128, true)
-        input = ct.TileArray{Float32,1,spec}(CUDA.zeros(Float32, 128))
-        output = ct.TileArray{Float32,1,spec}(CUDA.zeros(Float32, 128))
-        ir = ct.code_tiled(Tuple{typeof(input), typeof(output)}) do a, b
-            pid = ct.bid(1)
-            tile = ct.load(a, pid, (128,))
-            result = ct.cumsum(tile, ct.axis(1))
-            ct.store(b, pid, result)
-            return
-        end
-        println(ir)
-        if occursin("scan", ir)
-            println("  scan operation found in IR")
-        end
-    catch e
-        println("  IR generation skipped: $(typeof(e))")
-    end
-    println("=== End IR ===")
-    return nothing
+# Run scan example
+function show_scan_example()
+    println("\n=== Running 1D Cumsum Example ===")
+    n, sz = 1024, 256
+    a = CUDA.rand(Float32, n)
+    b = CUDA.zeros(Float32, n)
+    CUDA.@sync ct.launch(cumsum_1d_kernel, cld(n, sz), a, b, ct.Constant(sz))
+    res = Array(b)
+    exp = cumsum(Array(a), dims=1)
+    println(res ≈ exp ? "  ✓ PASS" : "  ✗ FAIL")
+    return
 end
 
 # Main test
@@ -74,57 +61,41 @@ function main()
     println("Compute: $(CUDA.capability(CUDA.device()))")
     println()
 
-    # IR test
-    println("--- IR Generation ---")
-    ir = show_scan_ir()
-    println(occursin("scan", ir) ? "✓ scan in IR" : "✗ scan NOT in IR")
-
-    # GPU tests
-    println()
-    println("--- GPU Tests ---")
+    # Run scan examples
+    show_scan_example()
 
     # Test 1: 1D cumsum
-    println("\nTest 1: 1D cumsum (1024 elements)")
-    n, sz = 1024, 256
-    a = CUDA.rand(Float32, n)
-    b = CUDA.zeros(Float32, n)
-    CUDA.@sync ct.launch(cumsum_1d_kernel, cld(n, sz), ct.TileArray(a), ct.TileArray(b), ct.Constant(sz))
-    res = Array(b)
-    exp = cumsum(Array(a), dims=1)
-    println(res ≈ exp ? "  PASS" : "  FAIL")
-
-    # Test 2: 1D cumsum larger
-    println("\nTest 2: 1D cumsum (32768 elements)")
+    println("\nTest 1: 1D cumsum (32768 elements)")
     n, sz = 32768, 1024
     a = CUDA.rand(Float32, n)
     b = CUDA.zeros(Float32, n)
-    CUDA.@sync ct.launch(cumsum_1d_kernel, cld(n, sz), ct.TileArray(a), ct.TileArray(b), ct.Constant(sz))
+    CUDA.@sync ct.launch(cumsum_1d_kernel, cld(n, sz), a, b, ct.Constant(sz))
     res = Array(b)
     exp = cumsum(Array(a), dims=1)
-    println(res ≈ exp ? "  PASS" : "  FAIL")
+    println(res ≈ exp ? "  ✓ PASS" : "  ✗ FAIL")
 
-    # Test 3: 2D cumsum along axis 2
-    println("\nTest 3: 2D cumsum (256 x 512), axis 2")
+    # Test 2: 2D cumsum along axis 2
+    println("\nTest 2: 2D cumsum (256 x 512), axis 2")
     m, n, tx, ty = 256, 512, 32, 32
     a = CUDA.rand(Float32, m, n)
     b = CUDA.zeros(Float32, m, n)
     CUDA.@sync ct.launch(cumsum_2d_kernel, (cld(n, tx), cld(m, ty)),
-                         ct.TileArray(a), ct.TileArray(b), ct.Constant(tx), ct.Constant(ty))
+                         a, b, ct.Constant(tx), ct.Constant(ty))
     res = Array(b)
     exp = cumsum(Array(a), dims=2)
-    println(res ≈ exp ? "  PASS" : "  FAIL")
+    println(res ≈ exp ? "  ✓ PASS" : "  ✗ FAIL")
 
-    # Test 4: 1D cumprod
-    println("\nTest 4: 1D cumprod (10000 elements)")
+    # Test 3: 1D cumprod
+    println("\nTest 3: 1D cumprod (10000 elements)")
     n, sz = 10000, 256
     a = CUDA.rand(Float32, n) .+ 0.1f0
     b = CUDA.zeros(Float32, n)
-    CUDA.@sync ct.launch(cumprod_1d_kernel, cld(n, sz), ct.TileArray(a), ct.TileArray(b), ct.Constant(sz))
+    CUDA.@sync ct.launch(cumprod_1d_kernel, cld(n, sz), a, b, ct.Constant(sz))
     res = Array(b)
     exp = cumprod(Array(a), dims=1)
-    println(res ≈ exp ? "  PASS" : "  FAIL")
+    println(res ≈ exp ? "  ✓ PASS" : "  ✗ FAIL")
 
-    println("\nDone!")
+    println("\n=== All tests complete ===")
 end
 
 main()
