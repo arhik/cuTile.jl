@@ -8,6 +8,11 @@ using ..cuTile: Tile, TileArray, Constant, TensorView, PartitionView
 using ..cuTile: Signedness, SignednessSigned, SignednessUnsigned
 using ..cuTile: ComparisonPredicate, CmpLessThan, CmpLessThanOrEqual, CmpGreaterThan, CmpGreaterThanOrEqual, CmpEqual, CmpNotEqual
 
+# Segmented scan intrinsics - returns Tile with same element type as values
+# Takes values tile, flags tile (both same shape), axis, fn symbol, and reverse flag
+segmented_scan(values::Tile{T,S}, flags::Tile{Bool,S}, axis::Val{A}, fn::Symbol, reverse::Bool) where {T,S,A} = error("Not implemented")
+exclusive_segmented_scan(values::Tile{T,S}, flags::Tile{Bool,S}, axis::Val{A}, fn::Symbol, reverse::Bool) where {T,S,A} = error("Not implemented")
+
 end
 
 # NOTE: Due to JuliaLang/julia#60583, intrinsics may be called during constant evaluation.
