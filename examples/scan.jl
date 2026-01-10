@@ -1,4 +1,3 @@
-
 # Scan Example for cuTile.jl
 # Demonstrates parallel prefix sum using Tile IR scan operation
 #
@@ -52,6 +51,66 @@ function show_scan_example()
     return
 end
 
+# ============================================================================
+# CSDL: Chained Scan with Decoupled Lookback
+# Full array cumulative sum across multiple tiles
+# ============================================================================
+
+# CSDL phase 1: Compute tile-level scan and store tile sums
+function cumsum_csdl_phase1(a::ct.TileArray{Float32,1}, b::ct.TileArray{Float32,1},
+                            tile_sums::ct.TileArray{Float32,1},
+                            tile_size::ct.Constant{Int})
+    bid = ct.bid(1)
+    # Load tile
+    tile = ct.load(a, bid, (tile_size[],))
+    # Intra-tile scan
+    result = ct.cumsum(tile, ct.axis(1))
+    # Store result
+    ct.store(b, bid, result)
+    # Extract and store tile sum (last element = cumulative sum of tile)
+    tile_sum = ct.extract(result, (tile_size[],), (1,))
+    ct.store(tile_sums, bid, tile_sum)
+    return
+end
+
+# CSDL phase 2: Decoupled lookback - add accumulated sums from previous tiles
+function cumsum_csdl_phase2(b::ct.TileArray{Float32,1},
+                            tile_sums::ct.TileArray{Float32,1},
+                            tile_size::ct.Constant{Int})
+    bid = ct.bid(1)
+    # Skip first block (no previous sums to add)
+    if bid == Int32(1)
+        return
+    end
+    # Compute sum of all previous tile sums (prefix sum of tile_sums[1:bid-1])
+    prev_sum = ct.zeros((tile_size[],), Float32)
+    k = Int32(1)
+    while k < bid
+        tile_sum_k = ct.load(tile_sums, (k,), (1,))
+        prev_sum = prev_sum + tile_sum_k
+        k += Int32(1)
+    end
+    # Load current tile, add accumulated sum, store back
+    tile = ct.load(b, bid, (tile_size[],))
+    result = tile + prev_sum
+    ct.store(b, bid, result)
+    return
+end
+
+# Full CSDL cumsum (both phases, automatic synchronization via separate launches)
+function cumsum_csdl(input::CuArray{Float32,1}, tile_size::Int=256)
+    n = length(input)
+    num_tiles = cld(n, tile_size)
+    # Allocate output and tile sums storage
+    output = CUDA.zeros(Float32, n)
+    tile_sums = CUDA.zeros(Float32, num_tiles)
+    # Phase 1: intra-tile scan + store tile sums
+    CUDA.@sync ct.launch(cumsum_csdl_phase1, num_tiles, input, output, tile_sums, ct.Constant(tile_size))
+    # Phase 2: decoupled lookback to accumulate previous tile sums
+    CUDA.@sync ct.launch(cumsum_csdl_phase2, num_tiles, output, tile_sums, ct.Constant(tile_size))
+    return output
+end
+
 # Main test
 function main()
     println("cuTile Scan Example")
@@ -63,6 +122,17 @@ function main()
 
     # Run scan examples
     show_scan_example()
+
+    # Run CSDL full array cumsum
+    println("\nTest CSDL: Full Array Cumsum (multi-tile)")
+    n, tile_sz = 32768, 1024
+    a = CUDA.rand(Float32, n)
+    exp = cumsum(Array(a), dims=1)
+    CUDA.@sync begin
+        result = cumsum_csdl(a, tile_sz)
+    end
+    res = Array(result)
+    println(res ≈ exp ? "  ✓ PASS" : "  ✗ FAIL")
 
     # Test 1: 1D cumsum
     println("\nTest 1: 1D cumsum (32768 elements)")
