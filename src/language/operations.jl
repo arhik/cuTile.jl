@@ -60,6 +60,24 @@ Axis is 1-indexed. Equivalent to cld(arr.sizes[axis], shape[axis]).
 end
 
 """
+    axis(i::Integer) -> Val{i-1}
+
+Return a compile-time axis selector for tile operations.
+Axis indices are 1-based (axis(1) = first dimension, axis(2) = second, etc.).
+Internally converts to 0-based for Tile IR.
+
+Use this instead of raw `Val` for self-documenting code.
+
+# Examples
+```julia
+ct.cumsum(tile, ct.axis(1))   # Scan along first axis
+ct.cumsum(tile, ct.axis(2))   # Scan along second axis
+ct.scan(tile, ct.axis(1), :add)
+```
+"""
+@inline axis(i::Integer) = Val(i - One())
+
+"""
     load(arr::TileArray, index, shape; padding_mode=PaddingMode.Undetermined) -> Tile
 
 Load a tile from a TileArray at the given index with the specified shape.
