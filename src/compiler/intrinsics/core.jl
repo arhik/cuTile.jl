@@ -728,6 +728,91 @@ encode_scan_body(cb, type, acc, elem, ::Val{:mul}, ::Type{T}) where T <: Abstrac
 encode_scan_body(cb, type, acc, elem, ::Val{:mul}, ::Type{T}) where T <: Integer =
     encode_MulIOp!(cb, type, acc, elem)
 
+# Custom scan with binary operator (e.g., WrappedAddMod for modulo arithmetic)
+function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.scan_with_op), args)
+    emit_scan_with_op!(ctx, args)
+end
+
+function emit_scan_with_op!(ctx::CGCtx, args)
+    cb = ctx.cb
+    tt = ctx.tt
+
+    # Get input tile
+    input_tv = emit_value!(ctx, args[1])
+    input_tv === nothing && error("Cannot resolve input tile for scan")
+
+    # Get scan axis
+    axis = @something get_constant(ctx, args[2]) error("Scan axis must be a compile-time constant")
+
+    # Get modulus M from Val{M} type parameter
+    mod_arg = args[3]
+    M = @something get_constant(ctx, mod_arg) error("Modulus must be a compile-time constant")
+
+    # Get reverse flag (optional, defaults to false)
+    reverse = false
+    if length(args) >= 4
+        reverse_val = get_constant(ctx, args[4])
+        reverse = reverse_val === true
+    end
+
+    # Get element type and shapes
+    input_type = unwrap_type(input_tv.jltype)
+    elem_type = input_type <: Tile ? input_type.parameters[1] : input_type
+    input_shape = input_tv.shape
+
+    # For scan, output shape is same as input shape
+    output_shape = copy(input_shape)
+
+    dtype = julia_to_tile_dtype!(tt, elem_type)
+
+    # Output tile type (same shape as input)
+    output_tile_type = tile_type!(tt, dtype, output_shape)
+
+    # Scalar type for scan body (0D tile)
+    scalar_tile_type = tile_type!(tt, dtype, Int[])
+
+    # Create identity value (0 for addmod)
+    identity_val = 0
+    if elem_type <: AbstractFloat
+        identity = ScanFloatIdentity(Float64(identity_val), dtype, elem_type)
+    elseif elem_type <: Integer
+        is_signed = elem_type <: Signed
+        identity = ScanIntegerIdentity(Int64(identity_val), dtype, elem_type, is_signed)
+    else
+        error("Unsupported element type for scan: $elem_type")
+    end
+
+    # Emit ScanOp with addmod body
+    results = encode_ScanOp!(cb, [output_tile_type], [input_tv.v], axis, reverse, [identity], [scalar_tile_type]) do block_args
+        acc, elem = block_args[1], block_args[2]
+        res = encode_scan_addmod_body!(cb, scalar_tile_type, acc, elem, Val(M), elem_type)
+        encode_YieldOp!(cb, [res])
+    end
+
+    CGVal(results[1], output_tile_type, Tile{elem_type, Tuple(output_shape)}, output_shape)
+end
+
+# Encode (acc + elem) % M for addmod scan
+function encode_scan_addmod_body!(cb, type, acc, elem, ::Val{M}, ::Type{T}) where {M, T}
+    # acc + elem
+    sum_res = if T <: AbstractFloat
+        encode_AddFOp!(cb, type, acc, elem)
+    elseif T <: Integer
+        encode_AddIOp!(cb, type, acc, elem)
+    else
+        error("Unsupported type for addmod scan: $T")
+    end
+    # Create constant M as 0D tile (same type as acc/elem)
+    M_val = encode_ConstantOp!(cb, type, [encode_immediate!(cb, T(M))])
+    # (acc + elem) % M
+    if T <: AbstractFloat
+        encode_RemFOp!(cb, type, sum_res, M_val)
+    else
+        encode_RemIOp!(cb, type, sum_res, M_val; signedness=SignednessSigned)
+    end
+end
+
+
 
 ## cuda_tile.reshape
 

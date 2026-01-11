@@ -13,6 +13,11 @@ using ..cuTile: ComparisonPredicate, CmpLessThan, CmpLessThanOrEqual, CmpGreater
 segmented_scan(values::Tile{T,S}, flags::Tile{Bool,S}, axis::Val{A}, fn::Symbol, reverse::Bool) where {T,S,A} = error("Not implemented")
 exclusive_segmented_scan(values::Tile{T,S}, flags::Tile{Bool,S}, axis::Val{A}, fn::Symbol, reverse::Bool) where {T,S,A} = error("Not implemented")
 
+# Custom scan with binary operator (e.g., WrappedAddMod for modulo arithmetic)
+# The op is a type parameter M for compile-time modulus
+scan_with_op(values::Tile{T,S}, axis::Val{A}, op::Type{Val{M}}, reverse::Bool) where {T,S,A,M} = error("Not implemented")
+
+
 end
 
 # NOTE: Due to JuliaLang/julia#60583, intrinsics may be called during constant evaluation.

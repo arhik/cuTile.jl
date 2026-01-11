@@ -1128,6 +1128,20 @@ function encode_RemIOp!(cb::CodeBuilder, result_type::TypeId, lhs::Value, rhs::V
 end
 
 """
+    encode_RemFOp!(cb, result_type, lhs, rhs) -> Value
+
+Float remainder (modulo).
+Opcode: 89
+"""
+function encode_RemFOp!(cb::CodeBuilder, result_type::TypeId, lhs::Value, rhs::Value)
+    encode_varint!(cb.buf, Opcode.RemFOp)
+    encode_typeid!(cb.buf, result_type)
+    encode_operand!(cb.buf, lhs)
+    encode_operand!(cb.buf, rhs)
+    return new_op!(cb)
+end
+
+"""
     encode_MinIOp!(cb, result_type, lhs, rhs; signedness) -> Value
 
 Integer minimum.
