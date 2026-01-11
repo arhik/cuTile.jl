@@ -582,6 +582,30 @@ end
         # Scan preserves shape - result has same dimensions as input
         Tile{T, S}()
     end
+
+    """
+        scan_with_op(tile, axis_val, M_val; reverse=false)
+
+    Parallel prefix scan with wrapped addition modulo M.
+    Computes (acc + elem) % M at each step.
+    Compiled to cuda_tile.scan with custom body.
+    """
+    @noinline function scan_with_op(tile::Tile{T, S}, ::Val{axis}, ::Type{Val{M}}, reverse::Bool=false) where {T, S, axis, M}
+        # Scan preserves shape - result has same dimensions as input
+        Tile{T, S}()
+    end
+
+    """
+        scan_with_custom_op(tile, axis_val, op_type, reverse=false)
+
+    Parallel prefix scan with custom binary operator.
+    Takes an operator type that implements scan_combine and scan_identity.
+    Compiled to cuda_tile.scan with custom body.
+    """
+    @noinline function scan_with_custom_op(tile::Tile{T, S}, ::Val{axis}, op_type::Type, reverse::Bool=false) where {T, S, axis}
+        # Scan preserves shape - result has same dimensions as input
+        Tile{T, S}()
+    end
 end
 
 function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.reduce_sum), args)
