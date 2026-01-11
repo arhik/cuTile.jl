@@ -636,7 +636,7 @@ function emit_reduce!(ctx::CGCtx, args, reduce_fn::Symbol)
     scalar_tile_type = tile_type!(tt, dtype, Int[])
 
     # Create identity value via dispatch on reduction function and element type
-    identity = reduce_identity(Val(reduce_fn), dtype, elem_type)
+    identity = operation_identity(Val(reduce_fn), dtype, elem_type)
 
     # Emit ReduceOp
     results = encode_ReduceOp!(cb, [output_tile_type], [input_tv.v], axis, [identity], [scalar_tile_type]) do block_args
@@ -662,47 +662,47 @@ is_signed(::Type{T}) where T <: Integer = T <: Integer && !(T <: Unsigned)
 is_signed(::Type{T}) where T <: AbstractFloat = false
 
 """
-    reduce_identity(reduce_fn, dtype, elem_type) -> IdentityOp
+    operation_identity(fn, dtype, elem_type) -> IdentityOp
 
 Return the identity value for a binary operation (reduce, scan, etc.).
 Identity must satisfy: identity ⊕ x = x for the operation.
 """
 # Addition identity: 0 + x = x
-reduce_identity(::Val{:add}, dtype, ::Type{T}) where T <: AbstractFloat =
+operation_identity(::Val{:add}, dtype, ::Type{T}) where T <: AbstractFloat =
     FloatIdentityOp(zero(T), dtype, T)
-reduce_identity(::Val{:add}, dtype, ::Type{T}) where T <: Integer =
+operation_identity(::Val{:add}, dtype, ::Type{T}) where T <: Integer =
     IntegerIdentityOp(zero(T), dtype, T, is_signed(T))
 
 # Maximum identity: max(typemin(T), x) = x
-reduce_identity(::Val{:max}, dtype, ::Type{T}) where T <: AbstractFloat =
+operation_identity(::Val{:max}, dtype, ::Type{T}) where T <: AbstractFloat =
     FloatIdentityOp(typemin(T), dtype, T)
-reduce_identity(::Val{:max}, dtype, ::Type{T}) where T <: Integer =
+operation_identity(::Val{:max}, dtype, ::Type{T}) where T <: Integer =
     IntegerIdentityOp(typemin(T), dtype, T, is_signed(T))
 
 # Multiplication identity: 1 * x = x
-reduce_identity(::Val{:mul}, dtype, ::Type{T}) where T <: AbstractFloat =
+operation_identity(::Val{:mul}, dtype, ::Type{T}) where T <: AbstractFloat =
     FloatIdentityOp(one(T), dtype, T)
-reduce_identity(::Val{:mul}, dtype, ::Type{T}) where T <: Integer =
+operation_identity(::Val{:mul}, dtype, ::Type{T}) where T <: Integer =
     IntegerIdentityOp(one(T), dtype, T, is_signed(T))
 
 # Minimum identity: min(typemax(T), x) = x
-reduce_identity(::Val{:min}, dtype, ::Type{T}) where T <: AbstractFloat =
+operation_identity(::Val{:min}, dtype, ::Type{T}) where T <: AbstractFloat =
     FloatIdentityOp(typemax(T), dtype, T)
-reduce_identity(::Val{:min}, dtype, ::Type{T}) where T <: Integer =
+operation_identity(::Val{:min}, dtype, ::Type{T}) where T <: Integer =
     IntegerIdentityOp(typemax(T), dtype, T, is_signed(T))
 
 # AND identity: all bits set (x & identity == x)
 # For signed: -one(T) has all bits set in two's complement
 # For unsigned: typemax(T) has all bits set
-reduce_identity(::Val{:and}, dtype, ::Type{T}) where T <: Integer =
+operation_identity(::Val{:and}, dtype, ::Type{T}) where T <: Integer =
     IntegerIdentityOp(is_signed(T) ? -one(T) : typemax(T), dtype, T, is_signed(T))
 
 # OR identity: 0 | x = x
-reduce_identity(::Val{:or}, dtype, ::Type{T}) where T <: Integer =
+operation_identity(::Val{:or}, dtype, ::Type{T}) where T <: Integer =
     IntegerIdentityOp(zero(T), dtype, T, is_signed(T))
 
 # XOR identity: 0 ⊕ x = x
-reduce_identity(::Val{:xor}, dtype, ::Type{T}) where T <: Integer =
+operation_identity(::Val{:xor}, dtype, ::Type{T}) where T <: Integer =
     IntegerIdentityOp(zero(T), dtype, T, is_signed(T))
 
 #=============================================================================
