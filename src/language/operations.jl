@@ -1181,10 +1181,10 @@ end
     Intrinsics.scan_with_op(tile, Val(axis), Val{M}, reverse)
 end
 
-# Custom operator fallback for TileFloat - matches any ScanOpMarker subtype
-@inline function scan(tile::TileFloat{S}, ::Val{Axis},
+# Catch-all for custom ScanOpMarker subtypes - provides clear error message
+@inline function scan(tile::Tile{T, S}, ::Val{axis},
                       op::ScanOpMarker;
-                      reverse::Bool=false) where {S, Axis}
-    # Custom operators use scan_with_custom_op which will call scan_combine
-    Intrinsics.scan_with_custom_op(tile, Val(Axis), typeof(op), reverse)
+                      reverse::Bool=false) where {T, S, axis}
+    error("Custom scan operators (subtypes of ScanOpMarker with custom scan_combine) are not yet fully supported. " *
+          "Use built-in operators like AddOp(), MaxOp(), MinOp(), MulOp(), or WrappedAddMod{M}() instead.")
 end

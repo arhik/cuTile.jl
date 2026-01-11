@@ -59,3 +59,57 @@ locks = CUDA.zeros(Int32, num_tiles)
 tile_sums = CUDA.zeros(elType, num_tiles)
 
 CUDA.@sync ct.launch(chainedScan, num_tiles, input, output, locks, tile_sums, ct.Constant(sz), ct.Constant(num_tiles))
+
+
+using Test
+using CUDA
+using cuTile
+import cuTile as ct
+
+function chainedScan(
+        input::ct.TileArray{Float32,1},
+        output::ct.TileArray{Float32,1},
+        locks::ct.TileArray{Int32,1},
+        tileSummary::ct.TileArray{Float32, 1},
+        tileSz::ct.Constant{Int},
+        numTiles::ct.Constant{Int}
+    )
+    bid = ct.bid(1)
+
+    tile = ct.load(input, bid, (tileSz[],))
+    tileScan = ct.cumsum(tile, ct.axis(1))
+    tileReduce = ct.extract(tileScan, (tileSz[],), (1,))
+
+    old = ct.atomic_cas(locks, bid, Int32(0), Int32(1); memory_order=ct.MemoryOrder.Release)
+
+    while ct.atomic_cas(locks, bid-1, Int32(0), Int32(1); memory_order=ct.MemoryOrder.Acquire) == old
+        # Spin - lock is held by another block
+    end
+
+    prevReduce = ct.zeros((tileSz[],), Float32)
+
+    # ct.where(bid == 1, Int32(1), Int32(2))
+    prevReduce = ct.load(prevReduce, (bid-1,), (1,))
+    # prev_sum = prev_sum .+ tile_sum_k
+
+    # ct.store(tile_sums, bid, stage)
+
+    # ct.atomic_cas(locks, bid, Int32(1), Int32(2);
+    #               memory_order=ct.MemoryOrder.Release)
+
+    # result = local_scan .+ prev_sum
+    # ct.store(output, bid, tileReduce)
+
+    return nothing
+end
+
+N = 2^15
+elType = Float32
+input = CUDA.rand(elType, N)
+output = CUDA.zeros(elType, N)
+sz = 32
+num_tiles = cld(N, sz)
+locks = CUDA.zeros(Int32, num_tiles)
+tile_sums = CUDA.zeros(elType, num_tiles)
+
+CUDA.@sync ct.launch(chainedScan, num_tiles, input, output, locks, tile_sums, ct.Constant(sz), ct.Constant(num_tiles))
