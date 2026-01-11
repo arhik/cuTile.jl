@@ -1069,57 +1069,109 @@ ct.scan_identity(::MyCounter, ::Type{Float32}) = Float32(-Inf)
 result = ct.scan(tile, ct.axis(1), MyCounter())
 ```
 """
-@generated function scan(tile::Tile{T, S}, ::Val{axis},
-                         op;
-                         reverse::Bool=false) where {T, S, axis}
+#=============================================================================
+ Scan Operator to Symbol Conversion
 
-    # Get operator type
-    Op = op
+ Converts operator types to symbols for kernel intrinsics.
+ These helpers enable trait-based operators to work in kernels.
+=============================================================================#
 
-    # Dispatch based on whether op is known
-    if is_known_scan_op(Op)
-        # Fast path: use built-in intrinsic
-        if Op <: AddOp || Op <: MulOp || Op <: MaxOp || Op <: MinOp
-            intrinsic = get_scan_intrinsic(Op)
-            return quote
-                $(Expr(:meta, :inline))
-                Intrinsics.scan(tile, Val(axis), $(QuoteNode(intrinsic)), reverse)
-            end
-        elseif Op <: WrappedAddMod{M} where M
-            return quote
-                $(Expr(:meta, :inline))
-                Intrinsics.scan_with_op(tile, Val(axis), Val{$M}, reverse)
-            end
-        end
-    else
-        # Slow path: custom operator - generate scan body
-        # This allows library authors to define their own operators
-        return quote
-            $(Expr(:meta, :inline))
-            # Custom scan body will be generated via encode_ScanOp!
-            Intrinsics.scan_with_custom_op(tile, Val(axis), $(QuoteNode(Op)), reverse)
-        end
-    end
-end
+# Convert operator to intrinsic symbol (for kernel use)
+@inline _op_to_symbol(::AddOp) = :add
+@inline _op_to_symbol(::MulOp) = :mul
+@inline _op_to_symbol(::MaxOp) = :max
+@inline _op_to_symbol(::MinOp) = :min
+@inline _op_to_symbol(::WrappedAddMod{M}) where M = :addmod
 
-# Convenience wrapper for symbol-based scan
+# Symbol-based scan (works in kernels via intrinsics)
 @inline scan(tile::Tile{T, S}, ::Val{axis}, fn::Symbol;
              reverse::Bool=false) where {T, S, axis} =
     Intrinsics.scan(tile, Val(axis), fn, reverse)
 
-# cumsum/cumprod convenience functions
+# cumsum/cumprod convenience functions (Tile{T, S} and TileFloat{T, S})
 @inline function cumsum(tile::Tile{T, S}, ::Val{axis},
                         reverse::Bool=false) where {T, S, axis}
-    scan(tile, Val(axis), AddOp(); reverse)
+    Intrinsics.scan(tile, Val(axis), :add, reverse)
 end
+
+# TileFloat type alias support - TileFloat{S} = Tile{T, S} where T <: ScalarFloat
+@inline cumsum(tile::TileFloat{S}, ::Val{axis},
+               reverse::Bool=false) where {S} =
+    Intrinsics.scan(tile, Val(axis), :add, reverse)
+
+@inline cumsum(tile::TileFloat{S}, ::Val{axis},
+               fn::Symbol,
+               reverse::Bool=false) where {S} =
+    Intrinsics.scan(tile, Val(axis), fn, reverse)
 
 @inline function cumsum(tile::Tile{T, S}, ::Val{axis},
                         fn::Symbol,
                         reverse::Bool=false) where {T, S, axis}
-    scan(tile, Val(axis), fn; reverse)
+    Intrinsics.scan(tile, Val(axis), fn, reverse)
 end
 
 @inline function cumprod(tile::Tile{T, S}, ::Val{axis},
                          reverse::Bool=false) where {T, S, axis}
-    scan(tile, Val(axis), MulOp(); reverse)
+    Intrinsics.scan(tile, Val(axis), :mul, reverse)
+end
+
+@inline cumprod(tile::TileFloat{S}, ::Val{axis},
+                reverse::Bool=false) where {S} =
+    Intrinsics.scan(tile, Val(axis), :mul, reverse)
+
+# Operator-based scan overloads (convert to symbols for kernel intrinsics)
+@inline function scan(tile::Tile{T, S}, ::Val{axis},
+                      op::AddOp;
+                      reverse::Bool=false) where {T, S, axis}
+    Intrinsics.scan(tile, Val(axis), :add, reverse)
+end
+
+# TileFloat support for operator-based scan
+@inline scan(tile::TileFloat{S}, ::Val{axis},
+             op::AddOp;
+             reverse::Bool=false) where {S} =
+    Intrinsics.scan(tile, Val(axis), :add, reverse)
+
+@inline scan(tile::TileFloat{S}, ::Val{axis},
+             op::MaxOp;
+             reverse::Bool=false) where {S} =
+    Intrinsics.scan(tile, Val(axis), :max, reverse)
+
+@inline scan(tile::TileFloat{S}, ::Val{axis},
+             op::MinOp;
+             reverse::Bool=false) where {S} =
+    Intrinsics.scan(tile, Val(axis), :min, reverse)
+
+@inline scan(tile::TileFloat{S}, ::Val{axis},
+             op::MulOp;
+             reverse::Bool=false) where {S} =
+    Intrinsics.scan(tile, Val(axis), :mul, reverse)
+
+@inline scan(tile::TileFloat{S}, ::Val{axis},
+             op::WrappedAddMod{M};
+             reverse::Bool=false) where {S, M} =
+    Intrinsics.scan_with_op(tile, Val(axis), Val{M}, reverse)
+
+@inline function scan(tile::Tile{T, S}, ::Val{axis},
+                      op::MulOp;
+                      reverse::Bool=false) where {T, S, axis}
+    Intrinsics.scan(tile, Val(axis), :mul, reverse)
+end
+
+@inline function scan(tile::Tile{T, S}, ::Val{axis},
+                      op::MaxOp;
+                      reverse::Bool=false) where {T, S, axis}
+    Intrinsics.scan(tile, Val(axis), :max, reverse)
+end
+
+@inline function scan(tile::Tile{T, S}, ::Val{axis},
+                      op::MinOp;
+                      reverse::Bool=false) where {T, S, axis}
+    Intrinsics.scan(tile, Val(axis), :min, reverse)
+end
+
+@inline function scan(tile::Tile{T, S}, ::Val{axis},
+                      op::WrappedAddMod{M};
+                      reverse::Bool=false) where {T, S, M, axis}
+    Intrinsics.scan_with_op(tile, Val(axis), Val{M}, reverse)
 end
