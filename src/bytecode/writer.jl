@@ -252,14 +252,15 @@ struct FloatIdentity <: ReduceIdentity
 end
 
 """
-    IntegerIdentity(value, type_id, dtype)
+    IntegerIdentity(value, type_id, dtype, signed)
 
-Integer identity value for reduce operations (and, or, xor).
+Integer identity value for reduce operations (add, max, mul, min, and, or, xor).
 """
 struct IntegerIdentity <: ReduceIdentity
     value::Int64  # Store as signed Int64, will be reinterpreted as unsigned
     type_id::TypeId
-    dtype::Type  # Int8, Int16, Int32, Int64, UInt8, etc.
+    dtype::Type   # Int8, Int16, Int32, Int64, UInt8, etc.
+    signed::Bool  # true for signed, false for unsigned
 end
 
 """
@@ -279,18 +280,22 @@ function encode_tagged_float!(cb::CodeBuilder, identity::FloatIdentity)
 end
 
 """
-    encode_tagged_int!(cb, identity::IntegerIdentity)
+    encode_tagged_int!(cb, identity::IntegerIdentity; is_reduce::Bool=true)
 
 Encode a tagged integer attribute for reduce identity.
 Format: tag(Int=0x01) + typeid + ap_int(value)
 """
-function encode_tagged_int!(cb::CodeBuilder, identity::IntegerIdentity)
+function encode_tagged_int!(cb::CodeBuilder, identity::IntegerIdentity; is_reduce::Bool=true)
     # Tag for Int attribute
     push!(cb.buf, 0x01)
     # Type ID
     encode_typeid!(cb.buf, identity.type_id)
-    # Value as signed varint
-    encode_signed_varint!(cb.buf, identity.value)
+    # Value: signed uses zigzag varint, unsigned uses plain varint
+    if identity.signed
+        encode_signed_varint!(cb.buf, identity.value)
+    else
+        encode_varint!(cb.buf, UInt64(identity.value))
+    end
 end
 
 """
