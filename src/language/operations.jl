@@ -10,7 +10,7 @@
  Load/Store
 =============================================================================#
 
-public bid, num_blocks, num_tiles, load, store, gather, scatter
+public bid, num_blocks, num_tiles, axis, load, store, gather, scatter
 
 """
 Padding mode for load operations.
