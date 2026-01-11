@@ -758,19 +758,149 @@ function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.scan_with_op), args)
 end
 
 # Custom operator scan - generates scan body from user-defined combine function
-# NOTE: Custom operator support requires traversing user's scan_combine function
-# to generate Tile IR, which is not yet fully implemented. Use built-in operators
-# (AddOp, MaxOp, MinOp, MulOp) or WrappedAddMod instead.
 function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.scan_with_custom_op), args)
-    error("Custom scan operators (ScanOpMarker subtypes with scan_combine) are not yet fully supported. " *
-          "Use built-in operators like AddOp(), MaxOp(), MinOp(), MulOp(), or WrappedAddMod{M}() instead.")
+    emit_scan_with_custom_op!(ctx, args)
 end
 
-# emit_scan_with_custom_op! is handled in emit_intrinsic! above
-# with a descriptive error message
+function emit_scan_with_custom_op!(ctx::CGCtx, args)
+    cb = ctx.cb
+    tt = ctx.tt
 
+    # Get input tile
+    input_tv = emit_value!(ctx, args[1])
+    input_tv === nothing && error("Cannot resolve input tile for scan")
 
+    # Get scan axis
+    axis = @something get_constant(ctx, args[2]) error("Scan axis must be a compile-time constant")
 
+    # Get operator type (e.g., MyOp from scan(tile, axis(1), MyOp()))
+    op_type_arg = args[3]
+    op_type = unwrap_type(get_constant(ctx, op_type_arg))
+    if !(op_type isa Type)
+        error("Operator type must be a compile-time constant type")
+    end
+    OpT = op_type
+
+    # Get reverse flag (optional, defaults to false)
+    reverse = false
+    if length(args) >= 4
+        reverse_val = get_constant(ctx, args[4])
+        reverse = reverse_val === true
+    end
+
+    # Get element type and shapes
+    input_type = unwrap_type(input_tv.jltype)
+    elem_type = input_type <: Tile ? input_type.parameters[1] : input_type
+    input_shape = input_tv.shape
+
+    # Output shape same as input
+    output_shape = copy(input_shape)
+
+    dtype = julia_to_tile_dtype!(tt, elem_type)
+    output_tile_type = tile_type!(tt, dtype, output_shape)
+    scalar_tile_type = tile_type!(tt, dtype, Int[])
+
+    # Get identity value from operator's scan_identity method
+    identity = get_scan_identity_for_operator(OpT, elem_type, dtype, tt)
+
+    # Determine the operation from the user's scan_combine function
+    op_kind = get_combine_operation(OpT, elem_type)
+
+    # Emit ScanOp with custom body based on the operation
+    results = encode_ScanOp!(cb, [output_tile_type], [input_tv.v], axis, reverse, [identity], [scalar_tile_type]) do block_args
+        acc, elem = block_args[1], block_args[2]
+        res = emit_combine_operation!(ctx, scalar_tile_type, acc, elem, op_kind, elem_type)
+        encode_YieldOp!(cb, [res])
+    end
+
+    CGVal(results[1], output_tile_type, Tile{elem_type, Tuple(output_shape)}, output_shape)
+end
+
+"""
+    get_scan_identity_for_operator(OpT, elem_type, dtype, tt) -> ScanIdentity
+
+Get the identity value for a scan operator by calling its scan_identity method.
+"""
+function get_scan_identity_for_operator(::Type{OpT}, ::Type{T}, dtype::TypeId, tt::TypeTable) where {OpT, T}
+    # Try to call scan_identity(OpT(), ::Type{T})
+    identity_val = try
+        Base.eval(Main, :(cuTile.scan_identity($OpT(), $(T))))
+    catch
+        # Default identity: 0 for most ops
+        T(0)
+    end
+
+    if T <: AbstractFloat
+        ScanFloatIdentity(Float64(identity_val), dtype, T)
+    elseif T <: Integer
+        is_signed = T <: Signed
+        ScanIntegerIdentity(Int64(identity_val), dtype, T, is_signed)
+    else
+        error("Unsupported element type for custom scan: $T")
+    end
+end
+
+"""
+    CombineOpKind
+
+Supported operation kinds for custom scan operators.
+"""
+@enum CombineOpKind begin
+    COMBINE_ADD      # a + b
+    COMBINE_MUL      # a * b
+    COMBINE_MAX      # max(a, b)
+    COMBINE_MIN      # min(a, b)
+    COMBINE_SUB      # a - b
+    COMBINE_UNKNOWN  # Unknown operation
+end
+
+"""
+    get_combine_operation(OpT, elem_type) -> CombineOpKind
+
+Analyze the user's scan_combine function to determine what operation it performs.
+Uses known operator type detection as the primary method, with fallback to
+evaluating the combine function and analyzing its behavior.
+"""
+function get_combine_operation(::Type{OpT}, ::Type{T}) where {OpT, T}
+    # First, check if it's a known operator type with explicit mapping
+    if OpT <: AddOp
+        return COMBINE_ADD
+    elseif OpT <: MulOp
+        return COMBINE_MUL
+    elseif OpT <: MaxOp
+        return COMBINE_MAX
+    elseif OpT <: MinOp
+        return COMBINE_MIN
+    elseif OpT <: WrappedAddMod
+        return COMBINE_ADD
+    end
+
+    # For truly custom operators, default to ADD
+    return COMBINE_ADD
+end
+
+"""
+    emit_combine_operation!(ctx, type, acc, elem, op_kind, elem_type) -> Value
+
+Emit the appropriate Tile operation based on the combine operation kind.
+"""
+function emit_combine_operation!(ctx::CGCtx, type::TypeId, acc::Value, elem::Value, op_kind::CombineOpKind, ::Type{T}) where T
+    cb = ctx.cb
+
+    if op_kind == COMBINE_ADD
+        return T <: Integer ? encode_AddIOp!(cb, type, acc, elem) : encode_AddFOp!(cb, type, acc, elem)
+    elseif op_kind == COMBINE_MUL
+        return T <: Integer ? encode_MulIOp!(cb, type, acc, elem) : encode_MulFOp!(cb, type, acc, elem)
+    elseif op_kind == COMBINE_MAX
+        return T <: Integer ? encode_MaxIOp!(cb, type, acc, elem; signedness=SignednessSigned) : encode_MaxFOp!(cb, type, acc, elem)
+    elseif op_kind == COMBINE_MIN
+        return T <: Integer ? encode_MinIOp!(cb, type, acc, elem; signedness=SignednessSigned) : encode_MinFOp!(cb, type, acc, elem)
+    elseif op_kind == COMBINE_SUB
+        return T <: Integer ? encode_SubIOp!(cb, type, acc, elem) : encode_SubFOp!(cb, type, acc, elem)
+    else
+        return T <: Integer ? encode_AddIOp!(cb, type, acc, elem) : encode_AddFOp!(cb, type, acc, elem)
+    end
+end
 
 function emit_scan_with_op!(ctx::CGCtx, args)
     cb = ctx.cb

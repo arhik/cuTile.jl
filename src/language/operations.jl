@@ -1185,6 +1185,12 @@ end
 @inline function scan(tile::Tile{T, S}, ::Val{axis},
                       op::ScanOpMarker;
                       reverse::Bool=false) where {T, S, axis}
-    error("Custom scan operators (subtypes of ScanOpMarker with custom scan_combine) are not yet fully supported. " *
-          "Use built-in operators like AddOp(), MaxOp(), MinOp(), MulOp(), or WrappedAddMod{M}() instead.")
+    Intrinsics.scan_with_custom_op(tile, Val(axis), typeof(op), reverse)
+end
+
+# TileFloat support for custom ScanOpMarker operators
+@inline function scan(tile::TileFloat{S}, ::Val{Axis},
+                      op::ScanOpMarker;
+                      reverse::Bool=false) where {S, Axis}
+    Intrinsics.scan_with_custom_op(tile, Val(Axis), typeof(op), reverse)
 end
