@@ -664,7 +664,25 @@ result = ct.reduce_xor(tile, 2)  # Returns (128,) tile of Int32
     Intrinsics.reduce_xor(tile, Val(axis - 1))
 end
 @inline function reduce_xor(tile::Tile{T, S}, ::Val{axis}) where {T <: Integer, S, axis}
-    Intrinsics.reduce_xor(tile, Val(axis - 1))
+Intrinsics.reduce_xor(tile, Val(axis - 1))
+end
+
+# Scan (Prefix Sum) Operations
+
+@inline function scan(tile::Tile{T, S}, ::Val{axis},
+                      fn::Symbol=:add,
+                      reverse::Bool=false) where {T, S, axis}
+    Intrinsics.scan(tile, Val(axis), fn, reverse)
+end
+
+@inline function cumsum(tile::Tile{T, S}, ::Val{axis},
+                        reverse::Bool=false) where {T, S, axis}
+    scan(tile, Val(axis), :add, reverse)
+end
+
+@inline function cumprod(tile::Tile{T, S}, ::Val{axis},
+                         reverse::Bool=false) where {T, S, axis}
+    scan(tile, Val(axis), :mul, reverse)
 end
 
 #=============================================================================
