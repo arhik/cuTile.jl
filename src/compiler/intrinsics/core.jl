@@ -619,6 +619,18 @@ end
 @generate_reduce_bodies(:min, Min)
 @generate_reduce_bodies(:mul, Mul)
 
+# Integer-only reductions (no float FOp variants)
+macro generate_int_reduce_bodies(op_name, op_suffix)
+    quote
+        encode_reduce_body(cb, type, acc, elem, ::Val{$op_name}, ::Type{T}) where T <: Integer =
+            $(Symbol(:encode_, op_suffix, :IOp!))(cb, type, acc, elem)
+    end
+end
+
+@generate_int_reduce_bodies(:and, And)
+@generate_int_reduce_bodies(:or, Or)
+@generate_int_reduce_bodies(:xor, XOr)
+
 
 # cuda_tile.reshape
 @eval Intrinsics begin
