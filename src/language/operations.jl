@@ -892,6 +892,65 @@ old_val = ct.atomic_add(counters, idx, Int32(1))
     Intrinsics.atomic_add(array, index - One(), val, memory_order, memory_scope)
 end
 
+#=============================================================================
+ Wrapped Addition Modulo for Scan Operations
+
+ Wrapped addition modulo is an associative binary operation, making it valid
+ for parallel prefix sums (scans). This is useful for circular counters,
+ angular accumulation, or any scenario where values should wrap around a modulus.
+
+ Example: with M=360, cumulative sum wraps at each 360:
+   Input:  [100, 200, 100, 50]
+   Output: [100, 300, 40,  90]  (wraps at 360)
+=============================================================================#
+
+"""
+    WrappedAddMod(M)
+
+Binary operator for scan that performs `(a + b) % M` where M is a compile-time constant.
+M must be an integer type (Int32, Int64, etc.).
+
+This is an associative binary operation, valid for parallel prefix sums.
+
+# Example
+```julia
+# Wrapped addition modulo 360 (e.g., for angle accumulation)
+op = WrappedAddMod{360}()
+result = scan(tile, axis=1, op)
+```
+"""
+struct WrappedAddMod{M} end
+WrappedAddMod(M::Integer) = WrappedAddMod{M}()
+
+# Type aliases for common modulus values
+const AddMod360 = WrappedAddMod{360}
+const AddMod256 = WrappedAddMod{256}
+const AddMod2π = WrappedAddMod{6283185306}  # 2π * 10^9 for fixed-point angles
+
+"""
+    addmod(a::Tile{T, S}, b::Tile{T, S}, ::Val{M}) -> Tile{T, S}
+
+Compute `(a + b) % M` for tiles with a compile-time constant modulus M.
+M must be a positive integer.
+
+This is the core operation for `WrappedAddMod` - it wraps the sum at modulus M,
+making it associative and suitable for parallel prefix sum operations.
+
+# Examples
+```julia
+# Wrapped addition with modulus 360
+result = addmod(tile_a, tile_b, Val{360}())
+
+# For scan operations, the pattern is:
+#   new_acc = addmod(acc, elem, Val{M}())
+```
+"""
+@inline function addmod(a::Tile{T, S}, b::Tile{T, S}, ::Val{M}) where {T, S, M}
+    sum_tile = a + b
+    mod_tile = Tile(T(M))
+    rem(sum_tile, mod_tile)
+end
+
 # Scan (Prefix Sum) Operations
 
 @inline function scan(tile::Tile{T, S}, ::Val{axis},
