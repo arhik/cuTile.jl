@@ -859,7 +859,7 @@ end
 
 Analyze the user's scan_combine function to determine what operation it performs.
 Uses known operator type detection as the primary method, with fallback to
-evaluating the combine function and analyzing its behavior.
+analyzing the actual scan_combine function AST.
 """
 function get_combine_operation(::Type{OpT}, ::Type{T}) where {OpT, T}
     # First, check if it's a known operator type with explicit mapping
@@ -875,8 +875,173 @@ function get_combine_operation(::Type{OpT}, ::Type{T}) where {OpT, T}
         return COMBINE_ADD
     end
 
-    # For truly custom operators, default to ADD
-    return COMBINE_ADD
+    # For truly custom operators, analyze the scan_combine function AST
+    return detect_operation_from_method(OpT, T)
+end
+
+"""
+    detect_operation_from_method(OpT, T) -> CombineOpKind
+
+Analyze the scan_combine method's AST to detect the binary operation.
+Traces through SSA values to find the actual operation.
+"""
+function detect_operation_from_method(::Type{OpT}, ::Type{T}) where {OpT, T}
+    try
+        # Get the Method for scan_combine
+        method = which(cuTile.scan_combine, (OpT, Tile{T, Tuple{}}, Tile{T, Tuple{}}))
+
+        # Get the method's CodeInfo (uncompressed AST)
+        code_info = Base.uncompressed_ast(method)
+
+        # Find the return statement and trace SSA values
+        for stmt in code_info.code
+            if stmt isa Core.ReturnNode && isdefined(stmt, :val)
+                result = trace_ssa_value(stmt.val, code_info.code)
+                if result != COMBINE_UNKNOWN
+                    return result
+                end
+            end
+        end
+
+        # Fallback: default to add
+        return COMBINE_ADD
+    catch
+        return COMBINE_ADD
+    end
+end
+
+"""
+    trace_ssa_value(val, code) -> CombineOpKind
+
+Trace an SSA value to find the expression it refers to.
+"""
+function trace_ssa_value(@nospecialize(val), code::Vector{Any})
+    if val isa Core.SSAValue
+        idx = val.id
+        if idx > 0 && idx <= length(code)
+            return analyze_statement(code[idx], code)
+        end
+    elseif val isa Core.ReturnNode
+        return trace_ssa_value(val.val, code)
+    elseif val isa Expr
+        return analyze_expr(val)
+    elseif val isa QuoteNode
+        return trace_ssa_value(val.value, code)
+    elseif val isa GlobalRef
+        return detect_from_name(val.name)
+    end
+    return COMBINE_UNKNOWN
+end
+
+"""
+    analyze_statement(stmt, code) -> CombineOpKind
+
+Analyze a statement to detect the binary operation.
+"""
+function analyze_statement(@nospecialize(stmt), code::Vector{Any})
+    if stmt isa Core.ReturnNode
+        return trace_ssa_value(stmt.val, code)
+    elseif stmt isa Expr
+        return analyze_expr(stmt, code)
+    elseif stmt isa GlobalRef
+        return detect_from_name(stmt.name)
+    elseif stmt isa Slot
+        return COMBINE_UNKNOWN
+    end
+    return COMBINE_UNKNOWN
+end
+
+"""
+    analyze_expr(expr, code) -> CombineOpKind
+
+Analyze an expression to detect binary operations.
+"""
+function analyze_expr(@nospecialize(expr), code::Vector{Any})
+    if expr isa Expr
+        if expr.head === :call
+            # Function call - check the function being called
+            fn = expr.args[1]
+            return detect_function_expr(fn, code)
+        elseif expr.head === :body
+            # Look for the last meaningful expression
+            for i in length(expr.args):-1:1
+                result = analyze_expr(expr.args[i], code)
+                if result != COMBINE_UNKNOWN
+                    return result
+                end
+            end
+        elseif expr.head === :(=)
+            # Assignment - analyze the RHS
+            return analyze_expr(expr.args[end], code)
+        elseif expr.head === :invoke
+            # Direct method call
+            fn = expr.args[1]
+            if fn isa Core.MethodInstance
+                return detect_function_expr(fn.def.name, code)
+            end
+        end
+    elseif expr isa GlobalRef
+        return detect_from_name(expr.name)
+    elseif expr isa Symbol
+        return detect_from_name(expr)
+    elseif expr isa Core.SSAValue
+        # Resolve the SSA value
+        idx = expr.id
+        if idx > 0 && idx <= length(code)
+            return analyze_statement(code[idx], code)
+        end
+    elseif expr isa Core.Argument
+        return COMBINE_UNKNOWN
+    elseif expr isa Slot
+        return COMBINE_UNKNOWN
+    end
+    return COMBINE_UNKNOWN
+end
+
+"""
+    detect_function_expr(fn, code) -> CombineOpKind
+
+Detect the operation from a function expression in a call.
+"""
+function detect_function_expr(@nospecialize(fn), code::Vector{Any})
+    if fn isa Symbol
+        return detect_from_name(fn)
+    elseif fn isa GlobalRef
+        return detect_from_name(fn.name)
+    elseif fn isa Core.SSAValue
+        # The function is stored in an SSA variable - resolve it
+        idx = fn.id
+        if idx > 0 && idx <= length(code)
+            return analyze_statement(code[idx], code)
+        end
+    elseif fn isa Core.MethodInstance
+        return detect_from_name(fn.def.name)
+    elseif fn isa Core.Slot
+        return COMBINE_UNKNOWN
+    elseif fn isa Core.Argument
+        return COMBINE_UNKNOWN
+    end
+    return COMBINE_UNKNOWN
+end
+
+"""
+    detect_from_name(name::Symbol) -> CombineOpKind
+
+Detect operation from a function name symbol.
+"""
+function detect_from_name(name::Symbol)
+    if name === :mul || name === :*
+        return COMBINE_MUL
+    elseif name === :max
+        return COMBINE_MAX
+    elseif name === :min
+        return COMBINE_MIN
+    elseif name === :add || name === :+
+        return COMBINE_ADD
+    elseif name === :sub || name === :-
+        return COMBINE_SUB
+    end
+    return COMBINE_UNKNOWN
 end
 
 """
