@@ -658,7 +658,7 @@ end
 
 Return true if type T is signed, false for unsigned types.
 """
-is_signed(::Type{T}) where T <: Integer = T <: SignedInteger
+is_signed(::Type{T}) where T <: Integer = T <: Integer && !(T <: Unsigned)
 is_signed(::Type{T}) where T <: AbstractFloat = false
 
 """
