@@ -33,7 +33,7 @@ include("language/broadcast.jl")
 include("language/operations.jl")
 include("language/overlays.jl")
 
-public launch
+public launch, bid, num_blocks, num_tiles, axis, load, store, gather, scatter
 launch() = error("Please import CUDA.jl before using `cuTile.launch`.")
 
 end # module cuTile
