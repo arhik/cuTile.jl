@@ -582,20 +582,42 @@ function emit_reduce!(ctx::CGCtx, args, reduce_fn::Symbol)
     # Emit ReduceOp
     results = encode_ReduceOp!(cb, [output_tile_type], [input_tv.v], axis, [identity], [scalar_tile_type]) do block_args
         acc, elem = block_args[1], block_args[2]
-
-        if reduce_fn == :add
-            res = encode_AddFOp!(cb, scalar_tile_type, acc, elem)
-        elseif reduce_fn == :max
-            res = encode_MaxFOp!(cb, scalar_tile_type, acc, elem)
-        else
-            error("Unsupported reduction function: $reduce_fn")
-        end
-
+        res = encode_reduce_body(cb, scalar_tile_type, acc, elem, Val(reduce_fn), elem_type)
         encode_YieldOp!(cb, [res])
     end
 
     CGVal(results[1], output_tile_type, Tile{elem_type, Tuple(output_shape)}, output_shape)
 end
+
+# Dispatch helpers for reduce body operations - dispatch on Val{fn} and elem_type
+
+"""
+    @generate_reduce_bodies(op_name, op_suffix)
+
+Generate `encode_reduce_body` methods for a binary reduction operator.
+Creates methods for both AbstractFloat and Integer types, dispatching to
+the corresponding F (float) and I (integer) opcode variants.
+
+# Example
+```julia
+@generate_reduce_bodies(:add, Add)
+@generate_reduce_bodies(:mul, Mul)
+```
+"""
+macro generate_reduce_bodies(op_name, op_suffix)
+    quote
+        encode_reduce_body(cb, type, acc, elem, ::Val{$op_name}, ::Type{T}) where T <: AbstractFloat =
+            $(Symbol(:encode_, op_suffix, :FOp!))(cb, type, acc, elem)
+        encode_reduce_body(cb, type, acc, elem, ::Val{$op_name}, ::Type{T}) where T <: Integer =
+            $(Symbol(:encode_, op_suffix, :IOp!))(cb, type, acc, elem)
+    end
+end
+
+# Generate reduce body methods for all supported reduction operations
+@generate_reduce_bodies(:add, Add)
+@generate_reduce_bodies(:max, Max)
+@generate_reduce_bodies(:min, Min)
+@generate_reduce_bodies(:mul, Mul)
 
 
 # cuda_tile.reshape
