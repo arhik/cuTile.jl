@@ -533,7 +533,7 @@ result = ct.astype(acc, ct.TFloat32)  # Convert to TF32 for tensor cores
  Reduction
 =============================================================================#
 
-public reduce_sum, reduce_max
+public reduce_sum, reduce_max, reduce_mul, reduce_min, reduce_and, reduce_or, reduce_xor
 
 """
     reduce_sum(tile::Tile{T, S}, axis::Integer) -> Tile{T, reduced_shape}
