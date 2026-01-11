@@ -86,7 +86,9 @@ function emit_kernel!(writer::BytecodeWriter, func_buf::Vector{UInt8},
             @assert length(values) == 1
             val = values[1]
             type_id = tile_type_for_julia!(ctx, target.sci.argtypes[arg_idx])
-            tv = CGVal(val, type_id, target.sci.argtypes[arg_idx])
+            # Extract shape from Tile arguments
+            shape = extract_tile_shape(target.sci.argtypes[arg_idx])
+            tv = CGVal(val, type_id, target.sci.argtypes[arg_idx], shape)
             ctx[SlotNumber(arg_idx)] = tv
             ctx[Argument(arg_idx)] = tv
         end

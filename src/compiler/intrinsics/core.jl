@@ -854,9 +854,10 @@ function emit_scan_with_op!(ctx::CGCtx, args)
     # Get scan axis
     axis = @something get_constant(ctx, args[2]) error("Scan axis must be a compile-time constant")
 
-    # Get modulus M from Val{M} type parameter
-    mod_arg = args[3]
-    M = @something get_constant(ctx, mod_arg) error("Modulus must be a compile-time constant")
+    # Get modulus M from Type{Val{M}} type parameter
+    mod_type_arg = args[3]
+    mod_type = unwrap_type(get_constant(ctx, mod_type_arg))
+    M = mod_type isa Type && mod_type <: Val ? mod_type.parameters[1] : mod_type
 
     # Get reverse flag (optional, defaults to false)
     reverse = false
@@ -913,7 +914,22 @@ function encode_scan_addmod_body!(cb, type, acc, elem, ::Val{M}, ::Type{T}) wher
         error("Unsupported type for addmod scan: $T")
     end
     # Create constant M as 0D tile (same type as acc/elem)
-    M_val = encode_ConstantOp!(cb, type, [encode_immediate!(cb, T(M))])
+    M_bytes = if T === Float32
+        collect(reinterpret(UInt8, [Float32(M)]))
+    elseif T === Float64
+        collect(reinterpret(UInt8, [Float64(M)]))
+    elseif T === Int32
+        collect(reinterpret(UInt8, [Int32(M)]))
+    elseif T === Int64
+        collect(reinterpret(UInt8, [Int64(M)]))
+    elseif T === UInt32
+        collect(reinterpret(UInt8, [UInt32(M)]))
+    elseif T === UInt64
+        collect(reinterpret(UInt8, [UInt64(M)]))
+    else
+        error("Unsupported type for addmod constant: $T")
+    end
+    M_val = encode_ConstantOp!(cb, type, M_bytes)
     # (acc + elem) % M
     if T <: AbstractFloat
         encode_RemFOp!(cb, type, sum_res, M_val)
