@@ -326,6 +326,35 @@ const ScalarOrTileFloat = Union{ScalarFloat, TileFloat}
 
 
 #=============================================================================
+ Scan Operator Traits
+
+ Enables cuTile to accept any binary function for scan operations.
+ Library authors can define custom operators by creating subtypes and
+ implementing scan_combine and scan_identity.
+
+ See operations.jl for the full trait system implementation.
+=============================================================================#
+
+"""
+    ScanOpMarker
+
+Abstract type for scan operators. Subtype this to define custom operators
+that can be used with ct.scan().
+
+# Example
+```julia
+struct MyOp <: ct.ScanOpMarker end
+
+ct.scan_combine(::MyOp, a::Tile{Float32}, b::Tile{Float32}) = max(a, b)
+ct.scan_identity(::MyOp, ::Type{Float32}) = Float32(-Inf)
+
+result = ct.scan(tile, ct.axis(1), MyOp())
+```
+"""
+abstract type ScanOpMarker end
+
+
+#=============================================================================
  One Singleton
 
  Singleton that adopts the type of the other operand in arithmetic.

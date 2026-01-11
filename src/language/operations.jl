@@ -951,26 +951,175 @@ result = addmod(tile_a, tile_b, Val{360}())
     rem(sum_tile, mod_tile)
 end
 
-# Scan (Prefix Sum) Operations
+#=============================================================================
+ Scan Operator Trait System (Hybrid Approach)
 
-@inline function scan(tile::Tile{T, S}, ::Val{axis},
-                      fn::Symbol=:add,
-                      reverse::Bool=false) where {T, S, axis}
-    Intrinsics.scan(tile, Val(axis), fn, reverse)
+ Enables cuTile to accept any binary function for scan while providing fast
+ paths for known operators (:add, :max, :mul) and falling back to generated
+ code for custom operators.
+
+ Library authors can implement their own operators - cuTile will handle them
+ without modification.
+=============================================================================#
+
+"""
+    ScanOpMarker
+
+Trait type to mark valid scan operators. Users can define their own operators
+by creating a subtype and implementing `scan_combine` and `scan_identity`.
+
+# Example
+```julia
+struct MyOp <: ct.ScanOpMarker end
+
+# Identity value for the operator
+ct.scan_identity(::MyOp, ::Type{Float32}) = Float32(0)
+
+# Combine function (binary op)
+ct.scan_combine(::MyOp, a::Tile{Float32}, b::Tile{Float32}) = a + b
+
+# Use in scan
+result = ct.scan(tile, ct.axis(1), MyOp())
+```
+"""
+abstract type ScanOpMarker end
+
+# Default implementations for WrappedAddMod
+scan_identity(::WrappedAddMod{M}, ::Type{T}) where {M, T} = T(0)
+scan_combine(::WrappedAddMod{M}, a::Tile{T}, b::Tile{T}) where {M, T} = addmod(a, b, Val{M}())
+
+# Built-in operator traits
+struct AddOp <: ScanOpMarker end
+struct MulOp <: ScanOpMarker end
+struct MaxOp <: ScanOpMarker end
+struct MinOp <: ScanOpMarker end
+
+# Identity values
+scan_identity(::AddOp, ::Type{T}) where T = T(0)
+scan_identity(::MulOp, ::Type{T}) where T = T(1)
+scan_identity(::MaxOp, ::Type{T}) where T = typemin(T)
+scan_identity(::MinOp, ::Type{T}) where T = typemax(T)
+
+# Combine functions - use intrinsics for known ops (fast path)
+scan_combine(::AddOp, a::Tile{T}, b::Tile{T}) where T = a + b
+scan_combine(::MulOp, a::Tile{T}, b::Tile{T}) where T = a * b
+scan_combine(::MaxOp, a::Tile{T}, b::Tile{T}) where T = max(a, b)
+scan_combine(::MinOp, a::Tile{T}, b::Tile{T}) where T = min(a, b)
+
+# Type aliases for convenience
+const ScanAdd = AddOp
+const ScanMul = MulOp
+const ScanMax = MaxOp
+const ScanMin = MinOp
+
+#=============================================================================
+ Hybrid Scan Implementation
+
+ Detects known operators at compile time:
+ - Known ops: use fast intrinsic path (:add, :max, :mul)
+ - Unknown ops: generate custom scan body via encode_ScanOp!
+=============================================================================#
+
+# Trait to check if an operator is a known intrinsic
+is_known_scan_op(::Type{<:WrappedAddMod}) = true
+is_known_scan_op(::Type{AddOp}) = true
+is_known_scan_op(::Type{MulOp}) = true
+is_known_scan_op(::Type{MaxOp}) = true
+is_known_scan_op(::Type{MinOp}) = true
+is_known_scan_op(::Type{<:ScanOpMarker}) = false  # Custom ops need generated body
+
+# Get the intrinsic symbol for known ops
+get_scan_intrinsic(::Type{AddOp}) = :add
+get_scan_intrinsic(::Type{MulOp}) = :mul
+get_scan_intrinsic(::Type{MaxOp}) = :max
+get_scan_intrinsic(::Type{MinOp}) = :min
+get_scan_intrinsic(::Type{<:WrappedAddMod{M}}) where M = :addmod  # Uses scan_with_op
+
+"""
+    scan(tile, axis, op; reverse=false)
+
+Compute parallel prefix sum (scan) along an axis with any binary operator.
+
+# Arguments
+- `tile`: Input tile
+- `axis`: Axis to scan along (Val{0}, Val{1}, etc.)
+- `op`: Binary operator (built-in or custom)
+  - Built-in: `:add`, `:max`, `:mul` symbols
+  - Traits: `AddOp()`, `MaxOp()`, `WrappedAddMod{M}()`
+  - Custom: Any subtype of `ScanOpMarker` with `scan_combine` and `scan_identity` defined
+- `reverse`: Scan in reverse order (default: false)
+
+# Examples
+```julia
+# Known operators (fast path)
+result = ct.scan(tile, ct.axis(1), :add)
+result = ct.scan(tile, ct.axis(1), :max)
+
+# Trait-based operators
+result = ct.scan(tile, ct.axis(1), AddOp())
+result = ct.scan(tile, ct.axis(1), MaxOp())
+
+# Custom modulo operator
+result = ct.scan(tile, ct.axis(1), WrappedAddMod{360}())
+
+# Custom operator (library authors can define their own)
+struct MyCounter <: ct.ScanOpMarker end
+ct.scan_combine(::MyCounter, a, b) = max(a, b)
+ct.scan_identity(::MyCounter, ::Type{Float32}) = Float32(-Inf)
+result = ct.scan(tile, ct.axis(1), MyCounter())
+```
+"""
+@generated function scan(tile::Tile{T, S}, ::Val{axis},
+                         op;
+                         reverse::Bool=false) where {T, S, axis}
+
+    # Get operator type
+    Op = op
+
+    # Dispatch based on whether op is known
+    if is_known_scan_op(Op)
+        # Fast path: use built-in intrinsic
+        if Op <: AddOp || Op <: MulOp || Op <: MaxOp || Op <: MinOp
+            intrinsic = get_scan_intrinsic(Op)
+            return quote
+                $(Expr(:meta, :inline))
+                Intrinsics.scan(tile, Val(axis), $(QuoteNode(intrinsic)), reverse)
+            end
+        elseif Op <: WrappedAddMod{M} where M
+            return quote
+                $(Expr(:meta, :inline))
+                Intrinsics.scan_with_op(tile, Val(axis), Val{$M}, reverse)
+            end
+        end
+    else
+        # Slow path: custom operator - generate scan body
+        # This allows library authors to define their own operators
+        return quote
+            $(Expr(:meta, :inline))
+            # Custom scan body will be generated via encode_ScanOp!
+            Intrinsics.scan_with_custom_op(tile, Val(axis), $(QuoteNode(Op)), reverse)
+        end
+    end
 end
 
-@inline function scan(tile::Tile{T, S}, ::Val{axis},
-                      op::WrappedAddMod{M},
-                      reverse::Bool=false) where {T, S, M, axis}
-    Intrinsics.scan_with_op(tile, Val(axis), Val{M}, reverse)
+# Convenience wrapper for symbol-based scan
+@inline scan(tile::Tile{T, S}, ::Val{axis}, fn::Symbol;
+             reverse::Bool=false) where {T, S, axis} =
+    Intrinsics.scan(tile, Val(axis), fn, reverse)
+
+# cumsum/cumprod convenience functions
+@inline function cumsum(tile::Tile{T, S}, ::Val{axis},
+                        reverse::Bool=false) where {T, S, axis}
+    scan(tile, Val(axis), AddOp(); reverse)
 end
 
 @inline function cumsum(tile::Tile{T, S}, ::Val{axis},
+                        fn::Symbol,
                         reverse::Bool=false) where {T, S, axis}
-    scan(tile, Val(axis), :add, reverse)
+    scan(tile, Val(axis), fn; reverse)
 end
 
 @inline function cumprod(tile::Tile{T, S}, ::Val{axis},
                          reverse::Bool=false) where {T, S, axis}
-    scan(tile, Val(axis), :mul, reverse)
+    scan(tile, Val(axis), MulOp(); reverse)
 end

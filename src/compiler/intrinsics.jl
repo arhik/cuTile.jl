@@ -4,7 +4,7 @@
 
 module Intrinsics
 
-using ..cuTile: Tile, TileArray, Constant, TensorView, PartitionView
+using ..cuTile: Tile, TileArray, Constant, TensorView, PartitionView, ScanOpMarker
 using ..cuTile: Signedness, SignednessSigned, SignednessUnsigned
 using ..cuTile: ComparisonPredicate, CmpLessThan, CmpLessThanOrEqual, CmpGreaterThan, CmpGreaterThanOrEqual, CmpEqual, CmpNotEqual
 
@@ -16,6 +16,11 @@ exclusive_segmented_scan(values::Tile{T,S}, flags::Tile{Bool,S}, axis::Val{A}, f
 # Custom scan with binary operator (e.g., WrappedAddMod for modulo arithmetic)
 # The op is a type parameter M for compile-time modulus
 scan_with_op(values::Tile{T,S}, axis::Val{A}, op::Type{Val{M}}, reverse::Bool) where {T,S,A,M} = error("Not implemented")
+
+# Custom operator scan - generates scan body from user-defined combine function
+# Library authors can define their own ScanOpMarker subtypes
+scan_with_custom_op(values::Tile{T,S}, axis::Val{A}, op::Type{<:ScanOpMarker}, reverse::Bool) where {T,S,A} = error("Custom scan not implemented yet - this placeholder allows type inference")
+
 
 
 end
