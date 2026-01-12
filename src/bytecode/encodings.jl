@@ -1342,7 +1342,7 @@ end
                    operands::Vector{Value},
                    dim::Int,
                    reverse::Bool,
-                   identities::Vector{<:ScanIdentity},
+                   identities::Vector{<:IdentityOp},
                    body_scalar_types::Vector{TypeId})
 
 Encode a ScanOp (parallel prefix sum) operation.
@@ -1362,7 +1362,7 @@ function encode_ScanOp!(body::Function, cb::CodeBuilder,
                         operands::Vector{Value},
                         dim::Int,
                         reverse::Bool,
-                        identities::Vector{<:ScanIdentity},
+                        identities::Vector{<:IdentityOp},
                         body_scalar_types::Vector{TypeId})
     encode_varint!(cb.buf, Opcode.ScanOp)
 
@@ -1372,7 +1372,7 @@ function encode_ScanOp!(body::Function, cb::CodeBuilder,
     # Attributes: dim (int), reverse (bool), identities (array)
     encode_opattr_int!(cb, dim)
     encode_opattr_bool!(cb, reverse)
-    encode_scan_identity_array!(cb, identities)
+    encode_identity_array!(cb, identities)
 
     # Variadic operands
     encode_varint!(cb.buf, length(operands))
