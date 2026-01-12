@@ -884,12 +884,12 @@ function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.scan), args)
     # Choose identity type based on element type
     if elem_type <: AbstractFloat
         # Use float identity for float types
-        identity = ScanFloatIdentity(identity_val, dtype, elem_type)
+        identity = FloatIdentityOp(identity_val, dtype, elem_type)
     elseif elem_type <: Integer
         # Use integer identity for integer types
         identity_val_int = fn_type == :add ? Int64(0) : Int64(1)
         is_signed = elem_type <: Signed
-        identity = ScanIntegerIdentity(identity_val_int, dtype, elem_type, is_signed)
+        identity = IntegerIdentityOp(identity_val_int, dtype, elem_type, is_signed)
     else
         error("Unsupported element type for scan: $elem_type")
     end
