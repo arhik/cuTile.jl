@@ -257,7 +257,7 @@ end
 Integer identity value for binary operations.
 """
 struct IntegerIdentityOp <: IdentityOp
-    value::Int64  # Store as signed Int64, will be reinterpreted as unsigned
+    value::Int128  # Use Int128 to accommodate typemax(UInt64)
     type_id::TypeId
     dtype::Type   # Int8, Int16, Int32, Int64, UInt8, etc.
     signed::Bool  # true for signed, false for unsigned
@@ -291,10 +291,11 @@ function encode_tagged_int!(cb::CodeBuilder, identity::IntegerIdentityOp)
     # Type ID
     encode_typeid!(cb.buf, identity.type_id)
     # Value: signed uses zigzag varint, unsigned uses plain varint
+    # Use Int128 to support typemax(UInt64) values
     if identity.signed
-        encode_signed_varint!(cb.buf, identity.value)
+        encode_signed_varint!(cb.buf, Int128(identity.value))
     else
-        encode_varint!(cb.buf, UInt64(identity.value))
+        encode_varint!(cb.buf, UInt128(identity.value))
     end
 end
 

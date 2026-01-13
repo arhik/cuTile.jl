@@ -144,8 +144,11 @@ function constant_to_bytes(@nospecialize(value), @nospecialize(T::Type))
         return UInt8[value ? 0xff : 0x00]
     elseif T === Int32 || T === UInt32
         return collect(reinterpret(UInt8, [Int32(value)]))
-    elseif T === Int64 || T === UInt64
+    elseif T === Int64
         return collect(reinterpret(UInt8, [Int64(value)]))
+    elseif T === UInt64
+        # Use UInt128 to avoid Int64 overflow for values like typemax(UInt64)
+        return collect(reinterpret(UInt8, [UInt128(value)]))
     elseif T === Float32
         return collect(reinterpret(UInt8, [Float32(value)]))
     elseif T === Float64

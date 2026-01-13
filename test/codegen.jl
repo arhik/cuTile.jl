@@ -1046,7 +1046,207 @@
     end
 
     #=========================================================================
-     8.9 Bitwise
+     8.9 Reductions
+    =========================================================================#
+    @testset "Reduce Operations" begin
+        # These tests validate reduce operations compile correctly and generate proper Tile IR
+        # They run without GPU via FileCheck, validating the Int128 identity encoding fix
+
+        @testset "reduce_sum (Float32)" begin
+            spec = ct.ArraySpec{1}(16, true)
+            @test @filecheck begin
+                @check_label "entry"
+                code_tiled(Tuple{ct.TileArray{Float32,1,spec}, ct.TileArray{Float32,1,spec}}) do a, b
+                    pid = ct.bid(1)
+                    tile = ct.load(a, pid, (16,))
+                    @check "reduce_sum"
+                    reduced = ct.reduce_sum(tile, 1)
+                    ct.store(b, pid, reduced)
+                    return
+                end
+            end
+        end
+
+        @testset "reduce_min (UInt64)" begin
+            spec_u64 = ct.ArraySpec{1}(16, true)
+            # This test specifically validates the Int128 encoding fix for UInt64 identity values
+            # reduce_min uses typemax(UInt64) = 0xffffffffffffffff as identity
+            @test @filecheck begin
+                @check_label "entry"
+                code_tiled(Tuple{ct.TileArray{UInt64,1,spec_u64}, ct.TileArray{UInt64,1,spec_u64}}) do a, b
+                    pid = ct.bid(1)
+                    tile = ct.load(a, pid, (16,))
+                    @check "reduce_min"
+                    reduced = ct.reduce_min(tile, 1)
+                    ct.store(b, pid, reduced)
+                    return
+                end
+            end
+        end
+
+        @testset "reduce_max (UInt64)" begin
+            spec_u64 = ct.ArraySpec{1}(16, true)
+            # reduce_max uses typemin(UInt64) = 0x0 as identity
+            @test @filecheck begin
+                @check_label "entry"
+                code_tiled(Tuple{ct.TileArray{UInt64,1,spec_u64}, ct.TileArray{UInt64,1,spec_u64}}) do a, b
+                    pid = ct.bid(1)
+                    tile = ct.load(a, pid, (16,))
+                    @check "reduce_max"
+                    reduced = ct.reduce_max(tile, 1)
+                    ct.store(b, pid, reduced)
+                    return
+                end
+            end
+        end
+
+        @testset "reduce_and (UInt64)" begin
+            spec_u64 = ct.ArraySpec{1}(16, true)
+            # reduce_and uses typemax(UInt64) as identity, testing the Int128 fix
+            @test @filecheck begin
+                @check_label "entry"
+                code_tiled(Tuple{ct.TileArray{UInt64,1,spec_u64}, ct.TileArray{UInt64,1,spec_u64}}) do a, b
+                    pid = ct.bid(1)
+                    tile = ct.load(a, pid, (16,))
+                    @check "reduce_and"
+                    reduced = ct.reduce_and(tile, 1)
+                    ct.store(b, pid, reduced)
+                    return
+                end
+            end
+        end
+
+        @testset "reduce_or (UInt64)" begin
+            spec_u64 = ct.ArraySpec{1}(16, true)
+            # reduce_or uses zero as identity
+            @test @filecheck begin
+                @check_label "entry"
+                code_tiled(Tuple{ct.TileArray{UInt64,1,spec_u64}, ct.TileArray{UInt64,1,spec_u64}}) do a, b
+                    pid = ct.bid(1)
+                    tile = ct.load(a, pid, (16,))
+                    @check "reduce_or"
+                    reduced = ct.reduce_or(tile, 1)
+                    ct.store(b, pid, reduced)
+                    return
+                end
+            end
+        end
+
+        @testset "reduce_xor (UInt64)" begin
+            spec_u64 = ct.ArraySpec{1}(16, true)
+            # reduce_xor uses zero as identity
+            @test @filecheck begin
+                @check_label "entry"
+                code_tiled(Tuple{ct.TileArray{UInt64,1,spec_u64}, ct.TileArray{UInt64,1,spec_u64}}) do a, b
+                    pid = ct.bid(1)
+                    tile = ct.load(a, pid, (16,))
+                    @check "reduce_xor"
+                    reduced = ct.reduce_xor(tile, 1)
+                    ct.store(b, pid, reduced)
+                    return
+                end
+            end
+        end
+
+        @testset "reduce_sum (UInt64)" begin
+            spec_u64 = ct.ArraySpec{1}(16, true)
+            # reduce_sum uses zero as identity
+            @test @filecheck begin
+                @check_label "entry"
+                code_tiled(Tuple{ct.TileArray{UInt64,1,spec_u64}, ct.TileArray{UInt64,1,spec_u64}}) do a, b
+                    pid = ct.bid(1)
+                    tile = ct.load(a, pid, (16,))
+                    @check "reduce_sum"
+                    reduced = ct.reduce_sum(tile, 1)
+                    ct.store(b, pid, reduced)
+                    return
+                end
+            end
+        end
+
+        @testset "reduce_min (Int32)" begin
+            spec_i32 = ct.ArraySpec{1}(16, true)
+            # reduce_min uses typemax(Int32) as identity for signed integers
+            @test @filecheck begin
+                @check_label "entry"
+                code_tiled(Tuple{ct.TileArray{Int32,1,spec_i32}, ct.TileArray{Int32,1,spec_i32}}) do a, b
+                    pid = ct.bid(1)
+                    tile = ct.load(a, pid, (16,))
+                    @check "reduce_min"
+                    reduced = ct.reduce_min(tile, 1)
+                    ct.store(b, pid, reduced)
+                    return
+                end
+            end
+        end
+
+        @testset "reduce_max (Int32)" begin
+            spec_i32 = ct.ArraySpec{1}(16, true)
+            # reduce_max uses typemin(Int32) as identity for signed integers
+            @test @filecheck begin
+                @check_label "entry"
+                code_tiled(Tuple{ct.TileArray{Int32,1,spec_i32}, ct.TileArray{Int32,1,spec_i32}}) do a, b
+                    pid = ct.bid(1)
+                    tile = ct.load(a, pid, (16,))
+                    @check "reduce_max"
+                    reduced = ct.reduce_max(tile, 1)
+                    ct.store(b, pid, reduced)
+                    return
+                end
+            end
+        end
+
+        @testset "reduce_and (Int32)" begin
+            spec_i32 = ct.ArraySpec{1}(16, true)
+            # reduce_and uses -1 (all bits set) as identity for signed integers
+            @test @filecheck begin
+                @check_label "entry"
+                code_tiled(Tuple{ct.TileArray{Int32,1,spec_i32}, ct.TileArray{Int32,1,spec_i32}}) do a, b
+                    pid = ct.bid(1)
+                    tile = ct.load(a, pid, (16,))
+                    @check "reduce_and"
+                    reduced = ct.reduce_and(tile, 1)
+                    ct.store(b, pid, reduced)
+                    return
+                end
+            end
+        end
+
+        @testset "reduce_or (Int32)" begin
+            spec_i32 = ct.ArraySpec{1}(16, true)
+            # reduce_or uses zero as identity
+            @test @filecheck begin
+                @check_label "entry"
+                code_tiled(Tuple{ct.TileArray{Int32,1,spec_i32}, ct.TileArray{Int32,1,spec_i32}}) do a, b
+                    pid = ct.bid(1)
+                    tile = ct.load(a, pid, (16,))
+                    @check "reduce_or"
+                    reduced = ct.reduce_or(tile, 1)
+                    ct.store(b, pid, reduced)
+                    return
+                end
+            end
+        end
+
+        @testset "reduce_xor (Int32)" begin
+            spec_i32 = ct.ArraySpec{1}(16, true)
+            # reduce_xor uses zero as identity
+            @test @filecheck begin
+                @check_label "entry"
+                code_tiled(Tuple{ct.TileArray{Int32,1,spec_i32}, ct.TileArray{Int32,1,spec_i32}}) do a, b
+                    pid = ct.bid(1)
+                    tile = ct.load(a, pid, (16,))
+                    @check "reduce_xor"
+                    reduced = ct.reduce_xor(tile, 1)
+                    ct.store(b, pid, reduced)
+                    return
+                end
+            end
+        end
+    end
+
+    #=========================================================================
+     8.10 Bitwise
     =========================================================================#
     # TODO: andi - bitwise AND
 
