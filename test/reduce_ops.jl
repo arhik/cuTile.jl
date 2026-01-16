@@ -217,7 +217,7 @@ end
     end
 
     m, n = 32, 64
-    a = CUDA.rand(Int32, m, n) .+ 1
+    a = CuArray{Int32}(rand(Int32, m, n)) .+ Int32(1)
     b = CUDA.zeros(Int32, m)
 
     ct.launch(reduce_add_i32_kernel, m, a, b)
