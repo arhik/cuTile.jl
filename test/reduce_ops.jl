@@ -239,7 +239,7 @@ end
     end
 
     m, n = 8, 16
-    a = CUDA.rand(Int32, m, n) .% 10 .+ 2
+    a = CuArray{Int32}(rand(Int32, m, n) .% Int32(10) .+ Int32(2))
     b = CUDA.ones(Int32, m)
 
     ct.launch(reduce_mul_i32_kernel, m, a, b)
