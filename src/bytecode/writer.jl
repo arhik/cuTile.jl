@@ -257,7 +257,7 @@ end
 Integer identity value for binary operations.
 """
 struct IntegerIdentityOp <: IdentityOp
-    value::Int64  # Store as signed Int64, will be reinterpreted as unsigned
+    value::UInt128  # Store as UInt128 to handle all unsigned values up to 64 bits
     type_id::TypeId
     dtype::Type   # Int8, Int16, Int32, Int64, UInt8, etc.
     signed::Bool  # true for signed, false for unsigned
@@ -291,12 +291,46 @@ function encode_tagged_int!(cb::CodeBuilder, identity::IntegerIdentityOp)
     # Type ID
     encode_typeid!(cb.buf, identity.type_id)
     # Value: signed uses zigzag varint, unsigned uses plain varint
+    # Mask value to correct bit width and apply zigzag for signed types
+    masked_value = mask_to_width(identity.value, identity.dtype, identity.signed)
     if identity.signed
-        encode_signed_varint!(cb.buf, identity.value)
+        encode_signed_varint!(cb.buf, masked_value)
     else
-        encode_varint!(cb.buf, UInt64(identity.value))
+        encode_varint!(cb.buf, masked_value)
     end
 end
+
+"""
+    mask_to_width(value, dtype, signed)
+
+Mask a UInt128 value to the correct bit width for the given type and apply zigzag if signed.
+For signed types, this masks first, then applies zigzag encoding.
+"""
+# Signed Int64: mask to 64 bits first, then zigzag encode
+mask_to_width(value::UInt128, ::Type{Int64}, signed::Bool) = 
+    let masked = UInt64(value & 0xFFFFFFFFFFFFFFFF)
+        UInt64((masked << 1) ⊻ (masked >>> 63))
+    end
+# Signed Int32: mask to 32 bits first, then zigzag encode
+mask_to_width(value::UInt128, ::Type{Int32}, signed::Bool) = 
+    let masked = UInt32(value & 0xFFFFFFFF)
+        UInt32((masked << 1) ⊻ (masked >>> 31))
+    end
+# Signed Int16: mask to 16 bits first, then zigzag encode
+mask_to_width(value::UInt128, ::Type{Int16}, signed::Bool) = 
+    let masked = UInt16(value & 0xFFFF)
+        UInt16((masked << 1) ⊻ (masked >>> 15))
+    end
+# Signed Int8: mask to 8 bits first, then zigzag encode
+mask_to_width(value::UInt128, ::Type{Int8}, signed::Bool) = 
+    let masked = UInt8(value & 0xFF)
+        UInt8((masked << 1) ⊻ (masked >>> 7))
+    end
+# Unsigned types: just mask to bit width, no zigzag
+mask_to_width(value::UInt128, ::Type{UInt64}, signed::Bool) = UInt64(value & 0xFFFFFFFFFFFFFFFF)
+mask_to_width(value::UInt128, ::Type{UInt32}, signed::Bool) = UInt32(value & 0xFFFFFFFF)
+mask_to_width(value::UInt128, ::Type{UInt16}, signed::Bool) = UInt16(value & 0xFFFF)
+mask_to_width(value::UInt128, ::Type{UInt8}, signed::Bool) = UInt8(value & 0xFF)
 
 """
     float_to_bits(value, dtype)
@@ -585,7 +619,7 @@ function finalize_function!(func_buf::Vector{UInt8}, cb::CodeBuilder,
 end
 
 #=============================================================================
- Optimization Hints 
+ Optimization Hints
 =============================================================================#
 
 """
