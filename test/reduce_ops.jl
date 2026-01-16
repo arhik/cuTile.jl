@@ -383,7 +383,8 @@ end
     a_cpu = Array(a)
     b_cpu = Array(b)
     for i in 1:m
-        @test b_cpu[i] == cpu_reduce_add(a_cpu[i:i, :], 2)[1]
+        expected = UInt32(cpu_reduce_add(a_cpu[i:i, :], 2)[1])
+        @test b_cpu[i] == expected
     end
 end
 
@@ -397,7 +398,7 @@ end
     end
 
     m, n = 8, 16
-    a = CUDA.rand(UInt32, m, n) .% 10 .+ 2
+    a = CuArray{UInt32}(rand(UInt32, m, n) .% UInt32(10) .+ UInt32(2))
     b = CUDA.ones(UInt32, m)
 
     ct.launch(reduce_mul_u32_kernel, m, a, b)
@@ -405,7 +406,8 @@ end
     a_cpu = Array(a)
     b_cpu = Array(b)
     for i in 1:m
-        @test b_cpu[i] == cpu_reduce_mul(a_cpu[i:i, :], 2)[1]
+        expected = UInt32(cpu_reduce_mul(a_cpu[i:i, :], 2)[1])
+        @test b_cpu[i] == expected
     end
 end
 
