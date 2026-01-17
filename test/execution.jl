@@ -875,8 +875,6 @@ end
     @test Array(b) ≈ sqrt.(Array(a)) rtol=1e-5
 end
 
-end
-
 @testset "reduction operations" begin
 
 @testset "reduce_sum along axis 1" begin
@@ -948,7 +946,251 @@ end
     end
 end
 
+# Kernel factory for reduce operations - extendable pattern
+function makeReduceKernel(::Type{T}, op::Symbol) where {T}
+    reduceFunc = if op == :reduce_sum
+        ct.reduce_sum
+    elseif op == :reduce_max
+        ct.reduce_max
+    # ADD NEW OPERATIONS HERE
+    # elseif op == :reduce_min
+    #     ct.reduce_min
+    # elseif op == :reduce_mul
+    #     ct.reduce_mul
+    end
+
+    @inline function kernel(a::ct.TileArray{T,1}, b::ct.TileArray{T,1}, tileSz::ct.Constant{Int})
+        ct.store(b, ct.bid(1), reduceFunc(ct.load(a, ct.bid(1), (tileSz[],)), Val(1)))
+        return nothing
+    end
+    return kernel
 end
+
+# Kernel factory for 2D reduce operations - extendable pattern
+function makeReduceKernel2D(::Type{T}, op::Symbol, axis::Int) where {T}
+    reduceFunc = if op == :reduce_sum
+        ct.reduce_sum
+    elseif op == :reduce_max
+        ct.reduce_max
+    # ADD NEW OPERATIONS HERE
+    # elseif op == :reduce_min
+    #     ct.reduce_min
+    # elseif op == :reduce_mul
+    #     ct.reduce_mul
+    end
+
+    @inline function kernel(a::ct.TileArray{T,2}, b::ct.TileArray{T,2}, tileSz::ct.Constant{Int})
+        if axis == 1
+            # Reduce along axis 1 (columns): each block handles one column
+            # Load tile: (tileSz, TILE_SIZE), reduce along axis 1
+            bidy = ct.bid(2)
+            tile = ct.load(a, (1, bidy), (tileSz[], TILE_SIZE))
+            result = reduceFunc(tile, Val(1))
+            ct.store(b, (1, bidy), result)
+        else
+            # Reduce along axis 2 (rows): each block handles one row
+            # Load tile: (TILE_SIZE, tileSz), reduce along axis 2
+            bidx = ct.bid(1)
+            tile = ct.load(a, (bidx, 1), (TILE_SIZE, tileSz[]))
+            result = reduceFunc(tile, Val(2))
+            ct.store(b, (bidx, 1), result)
+        end
+        return nothing
+    end
+    return kernel
+end
+
+# CPU reference implementation for reduce operations - extendable pattern
+function cpu_reduce(a_reshaped::AbstractArray{T}, op::Symbol) where {T}
+    if op == :reduce_sum
+        result = sum(a_reshaped, dims=1)[:]
+        # For unsigned types, apply mask to handle overflow
+        if T <: Unsigned
+            result .= result .& typemax(T)
+        end
+        return result
+    elseif op == :reduce_max
+        return maximum(a_reshaped, dims=1)[:]
+    # ADD NEW OPERATIONS HERE
+    # elseif op == :reduce_min
+    #     return minimum(a_reshaped, dims=1)[:]
+    # elseif op == :reduce_mul
+    #     return prod(a_reshaped, dims=1)[:]
+    end
+end
+
+# CPU reference implementation for 2D reduce operations - extendable pattern
+function cpu_reduce_2D(a::AbstractArray{T}, op::Symbol, axis::Int) where {T}
+    if op == :reduce_sum
+        result = sum(a, dims=axis)
+        # For unsigned types, apply mask to handle overflow
+        if T <: Unsigned
+            result .= result .& typemax(T)
+        end
+        return result
+    elseif op == :reduce_max
+        return maximum(a, dims=axis)
+    # ADD NEW OPERATIONS HERE
+    # elseif op == :reduce_min
+    #     return minimum(a, dims=axis)
+    # elseif op == :reduce_mul
+    #     return prod(a, dims=axis)
+    else
+        error("Unsupported operation: $op")
+    end
+end
+
+@testset "integer reduce operations (extendable)" begin
+    # Test parameters - easily extendable
+    TILE_SIZE = 32
+    N = 1024
+        
+    # Supported types - add new types here
+    # Note: UInt8 uses I8 base type with Unsigned signedness
+    TEST_TYPES = [Int8, Int16, Int32, Int64, UInt8, UInt16, UInt32, UInt64, Float16, Float32, Float64]
+        
+    # Supported operations - add new operations here
+    TEST_OPS = [:reduce_sum, :reduce_max]
+        
+    @testset "Type: $elType, Operation: $op" for elType in TEST_TYPES, op in TEST_OPS
+        # Create kernel using factory
+        reduceKernel = try
+            makeReduceKernel(elType, op)
+        catch e
+            @test_broken false
+            rethrow()
+        end
+            
+        # Generate input data with type-appropriate ranges
+        # Int8: -3 to 3 (32 * 3 = 96, safely within Int8 range -128 to 127)
+        # UInt8: 1 to 7 (32 * 7 = 224, safely within UInt8 range 0 to 255)
+        # Int16: -800 to 800 (32 * 800 = 25,600, safely within Int16 range -32,768 to 32,767)
+        # UInt16: 1 to 2000 (32 * 2000 = 64,000, safely within UInt16 range 0 to 65,535)
+        # Larger types: -1000 to 1000 (arbitrary but covers positive/negative)
+        # Floats: 0 to 1 (CUDA.rand default)
+        if elType == Int8
+            a_gpu = CuArray{Int8}(rand(-3:3, N))
+        elseif elType == UInt8
+            a_gpu = CuArray{UInt8}(rand(1:7, N))
+        elseif elType == Int16
+            a_gpu = CuArray{Int16}(rand(-800:800, N))
+        elseif elType == UInt16
+            a_gpu = CuArray{UInt16}(rand(1:2000, N))
+        elseif elType <: Integer && elType <: Signed
+            a_gpu = CuArray{elType}(rand(-1000:1000, N))
+        else
+            a_gpu = CUDA.rand(elType, N)
+        end
+        b_gpu = CUDA.zeros(elType, cld(N, TILE_SIZE))
+            
+        # Launch kernel
+        try
+            CUDA.@sync ct.launch(reduceKernel, cld(N, TILE_SIZE), a_gpu, b_gpu, ct.Constant(TILE_SIZE))
+        catch e
+            @test_broken false
+            rethrow()
+        end
+            
+        # Verify results
+        a_cpu = Array(a_gpu)
+        b_cpu = Array(b_gpu)
+        a_reshaped = reshape(a_cpu, TILE_SIZE, :)
+        cpu_result = cpu_reduce(a_reshaped, op)
+            
+        # Use appropriate comparison based on type
+        if elType <: AbstractFloat
+            @test b_cpu ≈ cpu_result rtol=1e-3
+        else
+            @test b_cpu == cpu_result
+        end
+    end
+end
+
+@testset "2D reduce operations (extendable)" begin
+    # Test parameters - easily extendable
+    TILE_SIZE = 32
+    M, N = 64, 128
+    
+    # Supported types - same as 1D tests
+    # Note: UInt8 uses I8 base type with Unsigned signedness
+    TEST_TYPES = [Int8, Int16, Int32, Int64, UInt8, UInt16, UInt32, UInt64, Float16, Float32, Float64]
+    
+    # Supported operations - same as 1D tests
+    TEST_OPS = [:reduce_sum, :reduce_max]
+    
+    # Test reducing along each axis (1 or 2 in Julia indexing)
+    @testset "Type: $elType, Operation: $op, Axis: $axis" for elType in TEST_TYPES, op in TEST_OPS, axis in [1, 2]
+        # Create kernel using factory
+        reduceKernel = try
+            makeReduceKernel2D(elType, op, axis)
+        catch e
+            @test_broken false
+            rethrow()
+        end
+        
+        # Generate input data with type-appropriate ranges
+        if elType == Int8
+            a_gpu = CuArray{Int8}(rand(-3:3, M, N))
+        elseif elType == UInt8
+            a_gpu = CuArray{UInt8}(rand(1:7, M, N))
+        elseif elType == Int16
+            a_gpu = CuArray{Int16}(rand(-800:800, M, N))
+        elseif elType == UInt16
+            a_gpu = CuArray{UInt16}(rand(1:2000, M, N))
+        elseif elType <: Integer && elType <: Signed
+            a_gpu = CuArray{elType}(rand(-1000:1000, M, N))
+        else
+            a_gpu = CUDA.rand(elType, M, N)
+        end
+        
+        # Output size depends on axis
+        if axis == 1
+            # Reduce along axis 1 (columns): output shape (1, N)
+            out_size = (1, N)
+        else
+            # Reduce along axis 2 (rows): output shape (M, 1)
+            out_size = (M, 1)
+        end
+        b_gpu = CUDA.zeros(elType, out_size)
+        
+        # Launch kernel
+        try
+            if axis == 1
+                # Reduce along axis 1: launch N blocks in y dimension
+                CUDA.@sync ct.launch(reduceKernel, (1, N), a_gpu, b_gpu, ct.Constant(TILE_SIZE))
+            else
+                # Reduce along axis 2: launch M blocks in x dimension
+                CUDA.@sync ct.launch(reduceKernel, (M, 1), a_gpu, b_gpu, ct.Constant(TILE_SIZE))
+            end
+        catch e
+            @test_broken false
+            rethrow()
+        end
+        
+        # Verify results
+        a_cpu = Array(a_gpu)
+        b_cpu = Array(b_gpu)
+        cpu_result = cpu_reduce_2D(a_cpu, op, axis)
+        
+        # Reshape b_cpu for comparison (remove singleton dimension)
+        if axis == 1
+            b_cpu_reshaped = reshape(b_cpu, N)
+            cpu_result_reshaped = reshape(cpu_result, N)
+        else
+            b_cpu_reshaped = reshape(b_cpu, M)
+            cpu_result_reshaped = reshape(cpu_result, M)
+        end
+        
+        # Use appropriate comparison based on type
+        if elType <: AbstractFloat
+            @test b_cpu_reshaped ≈ cpu_result_reshaped rtol=1e-3
+        else
+            @test b_cpu_reshaped == cpu_result_reshaped
+        end
+    end
+end
+
+end  # end of "reduction operations"
 
 @testset "scalar-tile operations" begin
 
@@ -1842,110 +2084,7 @@ end
     end
 end
 
-# Kernel factory for reduce operations - extendable pattern
-function makeReduceKernel(::Type{T}, op::Symbol) where {T}
-    reduceFunc = if op == :reduce_sum
-        ct.reduce_sum
-    elseif op == :reduce_max
-        ct.reduce_max
-    # ADD NEW OPERATIONS HERE
-    # elseif op == :reduce_min
-    #     ct.reduce_min
-    # elseif op == :reduce_mul
-    #     ct.reduce_mul
-    end
 
-    @inline function kernel(a::ct.TileArray{T,1}, b::ct.TileArray{T,1}, tileSz::ct.Constant{Int})
-        ct.store(b, ct.bid(1), reduceFunc(ct.load(a, ct.bid(1), (tileSz[],)), Val(1)))
-        return nothing
-    end
-    return kernel
-end
-
-# CPU reference implementation for reduce operations - extendable pattern
-function cpu_reduce(a_reshaped::AbstractArray{T}, op::Symbol) where {T}
-    if op == :reduce_sum
-        result = sum(a_reshaped, dims=1)[:]
-        # For unsigned types, apply mask to handle overflow
-        if T <: Unsigned
-            result .= result .& typemax(T)
-        end
-        return result
-    elseif op == :reduce_max
-        return maximum(a_reshaped, dims=1)[:]
-    # ADD NEW OPERATIONS HERE
-    # elseif op == :reduce_min
-    #     return minimum(a_reshaped, dims=1)[:]
-    # elseif op == :reduce_mul
-    #     return prod(a_reshaped, dims=1)[:]
-    end
-end
-
-@testset "1D reduce operations (extendable)" begin
-    # Test parameters - easily extendable
-    TILE_SIZE = 32
-    N = 1024
-    
-    # Supported types - add new types here
-    # Note: UInt8 uses I8 base type with Unsigned signedness
-    TEST_TYPES = [Int8, Int16, Int32, Int64, UInt8, UInt16, UInt32, UInt64, Float16, Float32, Float64]
-    
-    # Supported operations - add new operations here
-    TEST_OPS = [:reduce_sum, :reduce_max]
-    
-    @testset "Type: $elType, Operation: $op" for elType in TEST_TYPES, op in TEST_OPS
-        # Create kernel using factory
-        reduceKernel = try
-            makeReduceKernel(elType, op)
-        catch e
-            @test_broken false
-            rethrow()
-        end
-        
-        # Generate input data with type-appropriate ranges
-        # Int8: -3 to 3 (32 * 3 = 96, safely within Int8 range -128 to 127)
-        # UInt8: 1 to 7 (32 * 7 = 224, safely within UInt8 range 0 to 255)
-        # Int16: -800 to 800 (32 * 800 = 25,600, safely within Int16 range -32,768 to 32,767)
-        # UInt16: 1 to 2000 (32 * 2000 = 64,000, safely within UInt16 range 0 to 65,535)
-        # Larger types: -1000 to 1000 (arbitrary but covers positive/negative)
-        # Floats: 0 to 1 (CUDA.rand default)
-        if elType == Int8
-            a_gpu = CuArray{Int8}(rand(-3:3, N))
-        elseif elType == UInt8
-            a_gpu = CuArray{UInt8}(rand(1:7, N))
-        elseif elType == Int16
-            a_gpu = CuArray{Int16}(rand(-800:800, N))
-        elseif elType == UInt16
-            a_gpu = CuArray{UInt16}(rand(1:2000, N))
-        elseif elType <: Integer && elType <: Signed
-            a_gpu = CuArray{elType}(rand(-1000:1000, N))
-        else
-            a_gpu = CUDA.rand(elType, N)
-        end
-        b_gpu = CUDA.zeros(elType, cld(N, TILE_SIZE))
-        
-        # Launch kernel
-        try
-            CUDA.@sync ct.launch(reduceKernel, cld(N, TILE_SIZE), a_gpu, b_gpu, ct.Constant(TILE_SIZE))
-        catch e
-            @test_broken false
-            rethrow()
-        end
-        
-        # Verify results
-        a_cpu = Array(a_gpu)
-        b_cpu = Array(b_gpu)
-        a_reshaped = reshape(a_cpu, TILE_SIZE, :)
-        cpu_result = cpu_reduce(a_reshaped, op)
-        
-        # Use appropriate comparison based on type
-        if elType <: AbstractFloat
-            @test b_cpu ≈ cpu_result rtol=1e-3
-        else
-            @test b_cpu == cpu_result
-        end
-    end
-end
 
 @testset "transpose with hints" begin
     function transpose_with_hints(x::ct.TileArray{Float32,2},
