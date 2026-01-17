@@ -1172,15 +1172,16 @@ end
         
         # Verify results
         a_cpu = Array(a_gpu)
-        b_cpu = Array(b_gpu)
+        b_cpu = vec(Array(b_gpu))  # Ensure 1D
         # cpu_reduce_2D with axis=1 means sum along axis 1 (columns) -> output per row
         cpu_result = cpu_reduce_2D(a_cpu, op, 1)
+        cpu_result_1d = vec(cpu_result)  # Ensure 1D
         
         # Use appropriate comparison based on type
         if elType <: AbstractFloat
-            @test b_cpu ≈ cpu_result rtol=1e-3
+            @test b_cpu ≈ cpu_result_1d rtol=1e-3
         else
-            @test b_cpu == cpu_result
+            @test b_cpu == cpu_result_1d
         end
     end
     
@@ -1209,7 +1210,9 @@ end
         end
         
         # Output is 1D: reduce rows -> output per column (N elements)
-        b_gpu = CUDA.zeros(elType, N)
+        # Note: CUDA.zeros(elType, N) might create 2D (N, 1), so use explicit 1D
+        b_gpu = CuArray{T}(undef, N)
+        CUDA.fill!(b_gpu, zero(T))
         
         # Launch kernel - one block per column
         try
@@ -1221,15 +1224,16 @@ end
         
         # Verify results
         a_cpu = Array(a_gpu)
-        b_cpu = Array(b_gpu)
+        b_cpu = vec(Array(b_gpu))  # Ensure 1D
         # cpu_reduce_2D with axis=2 means sum along axis 2 (rows) -> output per column
         cpu_result = cpu_reduce_2D(a_cpu, op, 2)
+        cpu_result_1d = vec(cpu_result)  # Ensure 1D
         
         # Use appropriate comparison based on type
         if elType <: AbstractFloat
-            @test b_cpu ≈ cpu_result rtol=1e-3
+            @test b_cpu ≈ cpu_result_1d rtol=1e-3
         else
-            @test b_cpu == cpu_result
+            @test b_cpu == cpu_result_1d
         end
     end
 end
