@@ -969,7 +969,7 @@ function makeReduceKernel(::Type{T}, op::Symbol) where {T}
 end
 
 # Kernel factory for 2D reduce operations (axis 1: reduce columns -> output per row)
-function makeReduceKernel2D_axis1(::Type{T}, op::Symbol) where {T}
+function makeReduceKernel2D_axis1(::Type{T}, op::Symbol, tileSize::ct.Constant{Int}) where {T}
     reduceFunc = if op == :reduce_sum
         ct.reduce_sum
     elseif op == :reduce_max
@@ -983,7 +983,7 @@ function makeReduceKernel2D_axis1(::Type{T}, op::Symbol) where {T}
 
     @inline function kernel(a::ct.TileArray{T,2}, b::ct.TileArray{T,1})
         pid = ct.bid(1)
-        tile = ct.load(a, (pid, 1), (1, TILE_SIZE))
+        tile = ct.load(a, (pid, 1), (1, tileSize[]))
         result = reduceFunc(tile, Val(2))  # Val(2) = reduce columns (axis 1 in test)
         ct.store(b, pid, result)
         return nothing
@@ -992,7 +992,7 @@ function makeReduceKernel2D_axis1(::Type{T}, op::Symbol) where {T}
 end
 
 # Kernel factory for 2D reduce operations (axis 2: reduce rows -> output per column)
-function makeReduceKernel2D_axis2(::Type{T}, op::Symbol) where {T}
+function makeReduceKernel2D_axis2(::Type{T}, op::Symbol, tileSize::ct.Constant{Int}) where {T}
     reduceFunc = if op == :reduce_sum
         ct.reduce_sum
     elseif op == :reduce_max
@@ -1006,7 +1006,7 @@ function makeReduceKernel2D_axis2(::Type{T}, op::Symbol) where {T}
 
     @inline function kernel(a::ct.TileArray{T,2}, b::ct.TileArray{T,1})
         pid = ct.bid(2)
-        tile = ct.load(a, (1, pid), (TILE_SIZE, 1))
+        tile = ct.load(a, (1, pid), (tileSize[], 1))
         result = reduceFunc(tile, Val(1))  # Val(1) = reduce rows (axis 2 in test)
         ct.store(b, pid, result)
         return nothing
@@ -1122,8 +1122,10 @@ end
 
 @testset "2D reduce operations (extendable)" begin
     # Test parameters - easily extendable
-    TILE_SIZE = 32
-    M, N = TILE_SIZE, TILE_SIZE  # 32x32 matrix for simple single-tile reduction
+    # Use M=N for simplicity, each axis uses full dimension as tile size
+    M, N = 64, 128
+    TILE_SIZE_ROWS = M  # Full M dimension for reducing rows (axis=2)
+    TILE_SIZE_COLS = N  # Full N dimension for reducing columns (axis=1)
     
     # Supported types - same as 1D tests
     # Note: UInt8 uses I8 base type with Unsigned signedness
@@ -1136,7 +1138,7 @@ end
     @testset "Type: $elType, Operation: $op, Axis: 1 (reduce columns)" for elType in TEST_TYPES, op in TEST_OPS
         # Create kernel using factory for axis=1
         reduceKernel = try
-            makeReduceKernel2D_axis1(elType, op)
+            makeReduceKernel2D_axis1(elType, op, ct.Constant(TILE_SIZE_COLS))
         catch e
             @test_broken false
             rethrow()
@@ -1185,7 +1187,7 @@ end
     @testset "Type: $elType, Operation: $op, Axis: 2 (reduce rows)" for elType in TEST_TYPES, op in TEST_OPS
         # Create kernel using factory for axis=2
         reduceKernel = try
-            makeReduceKernel2D_axis2(elType, op)
+            makeReduceKernel2D_axis2(elType, op, ct.Constant(TILE_SIZE_ROWS))
         catch e
             @test_broken false
             rethrow()
