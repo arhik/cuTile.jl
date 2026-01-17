@@ -1887,7 +1887,8 @@ end
     N = 1024
     
     # Supported types - add new types here
-    TEST_TYPES = [Int8, Int16, Int32, Int64, UInt16, UInt32, UInt64, Float16, Float32, Float64]
+    # Note: UInt8 uses I8 base type with Unsigned signedness
+    TEST_TYPES = [Int8, Int16, Int32, Int64, UInt8, UInt16, UInt32, UInt64, Float16, Float32, Float64]
     
     # Supported operations - add new operations here
     TEST_OPS = [:reduce_sum, :reduce_max]
@@ -1903,12 +1904,15 @@ end
         
         # Generate input data with type-appropriate ranges
         # Int8: -3 to 3 (32 * 3 = 96, safely within Int8 range -128 to 127)
+        # UInt8: 1 to 7 (32 * 7 = 224, safely within UInt8 range 0 to 255)
         # Int16: -800 to 800 (32 * 800 = 25,600, safely within Int16 range -32,768 to 32,767)
         # UInt16: 1 to 2000 (32 * 2000 = 64,000, safely within UInt16 range 0 to 65,535)
         # Larger types: -1000 to 1000 (arbitrary but covers positive/negative)
         # Floats: 0 to 1 (CUDA.rand default)
         if elType == Int8
             a_gpu = CuArray{Int8}(rand(-3:3, N))
+        elseif elType == UInt8
+            a_gpu = CuArray{UInt8}(rand(1:7, N))
         elseif elType == Int16
             a_gpu = CuArray{Int16}(rand(-800:800, N))
         elseif elType == UInt16
