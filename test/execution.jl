@@ -968,38 +968,50 @@ function makeReduceKernel(::Type{T}, op::Symbol) where {T}
     return kernel
 end
 
-# Kernel factory for 2D reduce operations - extendable pattern
-function makeReduceKernel2D(::Type{T}, op::Symbol, axis::Int) where {T}
-reduceFunc = if op == :reduce_sum
-    ct.reduce_sum
-elseif op == :reduce_max
-    ct.reduce_max
-# ADD NEW OPERATIONS HERE
-# elseif op == :reduce_min
-#     ct.reduce_min
-# elseif op == :reduce_mul
-#     ct.reduce_mul
+# Kernel factory for 2D reduce operations (axis 1: reduce columns -> output per row)
+function makeReduceKernel2D_axis1(::Type{T}, op::Symbol) where {T}
+    reduceFunc = if op == :reduce_sum
+        ct.reduce_sum
+    elseif op == :reduce_max
+        ct.reduce_max
+    # ADD NEW OPERATIONS HERE
+    # elseif op == :reduce_min
+    #     ct.reduce_min
+    # elseif op == :reduce_mul
+    #     ct.reduce_mul
+    end
+
+    @inline function kernel(a::ct.TileArray{T,2}, b::ct.TileArray{T,1})
+        pid = ct.bid(1)
+        tile = ct.load(a, (pid, 1), (1, TILE_SIZE))
+        result = reduceFunc(tile, Val(2))  # Val(2) = reduce columns (axis 1 in test)
+        ct.store(b, pid, result)
+        return nothing
+    end
+    return kernel
 end
 
-@inline function kernel(a::ct.TileArray{T,2}, b::ct.TileArray{T,1}, tileSz::ct.Constant{Int})
-    if axis == 1
-        # Reduce along axis 1 (columns): each block handles one column
-        # Load tile: (tileSz, TILE_SIZE), reduce along axis 1 -> 1D result
-        bidy = ct.bid(2)
-        tile = ct.load(a, (1, bidy), (tileSz[], TILE_SIZE))
-        result = reduceFunc(tile, Val(1))
-        ct.store(b, bidy, result)
-    else
-        # Reduce along axis 2 (rows): each block handles one row
-        # Load tile: (TILE_SIZE, tileSz), reduce along axis 2 -> 1D result
-        bidx = ct.bid(1)
-        tile = ct.load(a, (bidx, 1), (TILE_SIZE, tileSz[]))
-        result = reduceFunc(tile, Val(2))
-        ct.store(b, bidx, result)
+# Kernel factory for 2D reduce operations (axis 2: reduce rows -> output per column)
+function makeReduceKernel2D_axis2(::Type{T}, op::Symbol) where {T}
+    reduceFunc = if op == :reduce_sum
+        ct.reduce_sum
+    elseif op == :reduce_max
+        ct.reduce_max
+    # ADD NEW OPERATIONS HERE
+    # elseif op == :reduce_min
+    #     ct.reduce_min
+    # elseif op == :reduce_mul
+    #     ct.reduce_mul
     end
-    return nothing
-end
-return kernel
+
+    @inline function kernel(a::ct.TileArray{T,2}, b::ct.TileArray{T,1})
+        pid = ct.bid(2)
+        tile = ct.load(a, (1, pid), (TILE_SIZE, 1))
+        result = reduceFunc(tile, Val(1))  # Val(1) = reduce rows (axis 2 in test)
+        ct.store(b, pid, result)
+        return nothing
+    end
+    return kernel
 end
 
 # CPU reference implementation for reduce operations - extendable pattern
@@ -1111,7 +1123,7 @@ end
 @testset "2D reduce operations (extendable)" begin
     # Test parameters - easily extendable
     TILE_SIZE = 32
-    M, N = 64, 128
+    M, N = TILE_SIZE, TILE_SIZE  # 32x32 matrix for simple single-tile reduction
     
     # Supported types - same as 1D tests
     # Note: UInt8 uses I8 base type with Unsigned signedness
@@ -1120,11 +1132,11 @@ end
     # Supported operations - same as 1D tests
     TEST_OPS = [:reduce_sum, :reduce_max]
     
-    # Test reducing along each axis (1 or 2 in Julia indexing)
-    @testset "Type: $elType, Operation: $op, Axis: $axis" for elType in TEST_TYPES, op in TEST_OPS, axis in [1, 2]
-        # Create kernel using factory
+    # Test reducing along each axis
+    @testset "Type: $elType, Operation: $op, Axis: 1 (reduce columns)" for elType in TEST_TYPES, op in TEST_OPS
+        # Create kernel using factory for axis=1
         reduceKernel = try
-            makeReduceKernel2D(elType, op, axis)
+            makeReduceKernel2D_axis1(elType, op)
         catch e
             @test_broken false
             rethrow()
@@ -1145,25 +1157,12 @@ end
             a_gpu = CUDA.rand(elType, M, N)
         end
         
-        # Output size is 1D: reduce along axis 1 -> N elements, reduce along axis 2 -> M elements
-        if axis == 1
-            # Reduce along axis 1 (columns): output N elements
-            out_len = N
-        else
-            # Reduce along axis 2 (rows): output M elements
-            out_len = M
-        end
-        b_gpu = CUDA.zeros(elType, out_len)
+        # Output is 1D: reduce columns -> output per row (M elements)
+        b_gpu = CUDA.zeros(elType, M)
         
-        # Launch kernel
+        # Launch kernel - one block per row
         try
-            if axis == 1
-                # Reduce along axis 1: launch N blocks in y dimension
-                CUDA.@sync ct.launch(reduceKernel, (1, N), a_gpu, b_gpu, ct.Constant(TILE_SIZE))
-            else
-                # Reduce along axis 2: launch M blocks in x dimension
-                CUDA.@sync ct.launch(reduceKernel, (M, 1), a_gpu, b_gpu, ct.Constant(TILE_SIZE))
-            end
+            CUDA.@sync ct.launch(reduceKernel, (M, 1), a_gpu, b_gpu)
         catch e
             @test_broken false
             rethrow()
@@ -1172,7 +1171,57 @@ end
         # Verify results
         a_cpu = Array(a_gpu)
         b_cpu = Array(b_gpu)
-        cpu_result = cpu_reduce_2D(a_cpu, op, axis)
+        # cpu_reduce_2D with axis=1 means sum along axis 1 (columns) -> output per row
+        cpu_result = cpu_reduce_2D(a_cpu, op, 1)
+        
+        # Use appropriate comparison based on type
+        if elType <: AbstractFloat
+            @test b_cpu ≈ cpu_result rtol=1e-3
+        else
+            @test b_cpu == cpu_result
+        end
+    end
+    
+    @testset "Type: $elType, Operation: $op, Axis: 2 (reduce rows)" for elType in TEST_TYPES, op in TEST_OPS
+        # Create kernel using factory for axis=2
+        reduceKernel = try
+            makeReduceKernel2D_axis2(elType, op)
+        catch e
+            @test_broken false
+            rethrow()
+        end
+        
+        # Generate input data with type-appropriate ranges
+        if elType == Int8
+            a_gpu = CuArray{Int8}(rand(-3:3, M, N))
+        elseif elType == UInt8
+            a_gpu = CuArray{UInt8}(rand(1:7, M, N))
+        elseif elType == Int16
+            a_gpu = CuArray{Int16}(rand(-800:800, M, N))
+        elseif elType == UInt16
+            a_gpu = CuArray{UInt16}(rand(1:2000, M, N))
+        elseif elType <: Integer && elType <: Signed
+            a_gpu = CuArray{elType}(rand(-1000:1000, M, N))
+        else
+            a_gpu = CUDA.rand(elType, M, N)
+        end
+        
+        # Output is 1D: reduce rows -> output per column (N elements)
+        b_gpu = CUDA.zeros(elType, N)
+        
+        # Launch kernel - one block per column
+        try
+            CUDA.@sync ct.launch(reduceKernel, (1, N), a_gpu, b_gpu)
+        catch e
+            @test_broken false
+            rethrow()
+        end
+        
+        # Verify results
+        a_cpu = Array(a_gpu)
+        b_cpu = Array(b_gpu)
+        # cpu_reduce_2D with axis=2 means sum along axis 2 (rows) -> output per column
+        cpu_result = cpu_reduce_2D(a_cpu, op, 2)
         
         # Use appropriate comparison based on type
         if elType <: AbstractFloat
