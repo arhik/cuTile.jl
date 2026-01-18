@@ -305,19 +305,19 @@ end
 
 Mask a UInt128 value to the correct bit width for the given type and apply zigzag if signed.
 """
-mask_to_width(value::UInt128, ::Type{Int64}, signed::Bool) = 
+mask_to_width(value::UInt128, ::Type{Int64}, signed::Bool) =
     let masked = UInt64(value & 0xFFFFFFFFFFFFFFFF)
         UInt64((masked << 1) ⊻ (masked >>> 63))
     end
-mask_to_width(value::UInt128, ::Type{Int32}, signed::Bool) = 
+mask_to_width(value::UInt128, ::Type{Int32}, signed::Bool) =
     let masked = UInt32(value & 0xFFFFFFFF)
         UInt32((masked << 1) ⊻ (masked >>> 31))
     end
-mask_to_width(value::UInt128, ::Type{Int16}, signed::Bool) = 
+mask_to_width(value::UInt128, ::Type{Int16}, signed::Bool) =
     let masked = UInt16(value & 0xFFFF)
         UInt16((masked << 1) ⊻ (masked >>> 15))
     end
-mask_to_width(value::UInt128, ::Type{Int8}, signed::Bool) = 
+mask_to_width(value::UInt128, ::Type{Int8}, signed::Bool) =
     let masked = UInt8(value & 0xFF)
         UInt8((masked << 1) ⊻ (masked >>> 7))
     end
@@ -612,7 +612,7 @@ function finalize_function!(func_buf::Vector{UInt8}, cb::CodeBuilder,
 end
 
 #=============================================================================
- Optimization Hints 
+ Optimization Hints
 =============================================================================#
 
 """
