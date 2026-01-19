@@ -609,13 +609,13 @@ Identity must satisfy: identity ⊕ x = x for the operation.
 operation_identity(::Val{:add}, dtype, ::Type{T}) where T <: AbstractFloat =
     FloatIdentityOp(zero(T), dtype, T)
 operation_identity(::Val{:add}, dtype, ::Type{T}) where T <: Integer =
-    IntegerIdentityOp(to_uint128(zero(T)), dtype, T, T <: Signed)
+    IntegerIdentityOp(to_uint128(zero(T)), dtype, T)
 
 # Maximum identity: max(typemin(T), x) = x
 operation_identity(::Val{:max}, dtype, ::Type{T}) where T <: AbstractFloat =
     FloatIdentityOp(typemin(T), dtype, T)
 operation_identity(::Val{:max}, dtype, ::Type{T}) where T <: Integer =
-    IntegerIdentityOp(to_uint128(typemin(T)), dtype, T, T <: Signed)
+    IntegerIdentityOp(to_uint128(typemin(T)), dtype, T)
 
 #=============================================================================#
 # Reduce Body Operations - dispatch on Val{fn} and elem_type
