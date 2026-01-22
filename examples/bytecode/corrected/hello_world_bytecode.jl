@@ -24,7 +24,7 @@ function generate_hello_world_bytecode()
     push!(buf, 0x00)  # Tag high
 
     # 3. Function Table Section (ID=2, required, with 8-byte alignment)
-    # Header: ID with alignment bit
+    # Section header: ID with alignment bit
     push!(buf, 0x82)  # ID=2 with high bit set (alignment required)
 
     # Function table data
@@ -66,7 +66,54 @@ function generate_hello_world_bytecode()
     # Function table data
     append!(buf, func_data)
 
-    # 4. Type Section (ID=5, required, with 4-byte alignment)
+    # 4. Constant Data Section (ID=4, optional, with 8-byte alignment)
+    # We don't need constants for this simple example, but we include an empty section
+    # to maintain the expected section order
+    push!(buf, 0x84)  # ID=4 with high bit set (alignment required)
+
+    # Empty constant data
+    const_data = UInt8[]
+    encode_varint!(const_data, 0)  # No constants
+
+    # Section length
+    encode_varint!(buf, length(const_data))
+    # Section alignment
+    encode_varint!(buf, 8)  # 8-byte alignment
+
+    # Add padding to ensure 8-byte alignment for constant data
+    current_pos = length(buf) + 1  # Position after alignment byte
+    padding_needed = (8 - current_pos % 8) % 8
+    for _ in 1:padding_needed
+        push!(buf, 0xCB)  # Padding byte
+    end
+
+    # Constant data (empty)
+    append!(buf, const_data)
+
+    # 5. Debug Section (ID=3, optional, with 8-byte alignment)
+    # We don't need debug info for this simple example
+    push!(buf, 0x83)  # ID=3 with high bit set (alignment required)
+
+    # Empty debug data
+    debug_data = UInt8[]
+    encode_varint!(debug_data, 0)  # No debug entries
+
+    # Section length
+    encode_varint!(buf, length(debug_data))
+    # Section alignment
+    encode_varint!(buf, 8)  # 8-byte alignment
+
+    # Add padding to ensure 8-byte alignment for debug data
+    current_pos = length(buf) + 1  # Position after alignment byte
+    padding_needed = (8 - current_pos % 8) % 8
+    for _ in 1:padding_needed
+        push!(buf, 0xCB)  # Padding byte
+    end
+
+    # Debug data (empty)
+    append!(buf, debug_data)
+
+    # 6. Type Section (ID=5, required, with 4-byte alignment)
     # Section header: ID with alignment bit
     push!(buf, 0x85)  # ID=5 with high bit set (alignment required)
 
@@ -82,11 +129,11 @@ function generate_hello_world_bytecode()
     # Section length
     encode_varint!(buf, length(type_data))
     # Section alignment
-    encode_varint!(buf, 8)  # 8-byte alignment
+    encode_varint!(buf, 4)  # 4-byte alignment (not 8!)
 
-    # Add padding to ensure 8-byte alignment for type data
+    # Add padding to ensure 4-byte alignment for type data
     current_pos = length(buf) + 1  # Position after alignment byte
-    padding_needed = (8 - current_pos % 8) % 8
+    padding_needed = (4 - current_pos % 4) % 4
     for _ in 1:padding_needed
         push!(buf, 0xCB)  # Padding byte
     end
@@ -94,9 +141,9 @@ function generate_hello_world_bytecode()
     # Add type data
     append!(buf, type_data)
 
-    # 5. String Section (ID=1, required)
-    # Header
-    push!(buf, 0x01)
+    # 7. String Section (ID=1, required, with 4-byte alignment)
+    # Header with alignment bit
+    push!(buf, 0x81)  # ID=1 with high bit set (alignment required)
 
     # String data
     string_data = UInt8[]
@@ -111,10 +158,20 @@ function generate_hello_world_bytecode()
 
     # Section length
     encode_varint!(buf, length(string_data))
+    # Section alignment
+    encode_varint!(buf, 4)  # 4-byte alignment
+
+    # Add padding to ensure 4-byte alignment for string data
+    current_pos = length(buf) + 1  # Position after alignment byte
+    padding_needed = (4 - current_pos % 4) % 4
+    for _ in 1:padding_needed
+        push!(buf, 0xCB)  # Padding byte
+    end
+
     # String section data
     append!(buf, string_data)
 
-    # 6. End-of-Bytecode Marker (required)
+    # 8. End-of-Bytecode Marker (required)
     push!(buf, 0x00)
 
     return buf
