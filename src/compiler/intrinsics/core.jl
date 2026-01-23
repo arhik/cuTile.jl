@@ -890,59 +890,409 @@ end
     emit_map_body!(ctx, f_arg, elem, scalar_type, elem_type) -> Value
 
 Emit bytecode for the map function f applied to element.
+Supports decomposition of composite expressions into sequences of Tile IR ops.
 """
 function emit_map_body!(ctx::CGCtx, @nospecialize(f_arg), elem::Value, scalar_type::TypeId, ::Type{T}) where T
     cb = ctx.cb
+    tt = ctx.tt
 
-    # Try to identify the map function
-    fn = extract_function(ctx, f_arg)
-
-    # Handle known functions
-    if fn !== nothing
-        if fn === identity
+    # First, try direct single-op functions
+    direct_fn = extract_direct_function(ctx, f_arg)
+    if direct_fn !== nothing
+        if direct_fn === :identity
             return elem
-        elseif fn === abs
+        elseif direct_fn === :abs
             return encode_AbsFOp!(cb, scalar_type, elem)
-        elseif fn === sqrt
+        elseif direct_fn === :sqrt
             return encode_SqrtOp!(cb, scalar_type, elem)
-        elseif fn === exp
+        elseif direct_fn === :exp
             return encode_ExpOp!(cb, scalar_type, elem)
-        elseif fn === log
+        elseif direct_fn === :log
             return encode_LogOp!(cb, scalar_type, elem)
-        elseif fn === sin
+        elseif direct_fn === :sin
             return encode_SinOp!(cb, scalar_type, elem)
-        elseif fn === cos
+        elseif direct_fn === :cos
             return encode_CosOp!(cb, scalar_type, elem)
+        elseif direct_fn === :neg
+            return encode_NegFOp!(cb, scalar_type, elem)
+        elseif direct_fn === :abs2
+            return encode_MulFOp!(cb, scalar_type, elem, elem)
         end
     end
 
+    # Try to decompose composite expressions
+    decomposed = try_decompose_expr(ctx, f_arg, elem, scalar_type, T)
+    if decomposed !== nothing
+        return decomposed
+    end
+
+    error("Unsupported map function. Supported: identity, abs, abs2, sqrt, exp, log, sin, cos, neg, and decomposable expressions like x+c, x*c, (x+c)*d, sin(x)+1, etc.")
+end
+
+"""
+    extract_direct_function(ctx, f_arg) -> Union{Symbol, Nothing}
+
+Extract a direct function name from f_arg.
+"""
+function extract_direct_function(ctx::CGCtx, @nospecialize(f_arg))
     # Check GlobalRef for common functions
     if f_arg isa GlobalRef
         name = f_arg.name
-        if name === :identity
-            return elem
-        elseif name === :abs
-            return encode_AbsFOp!(cb, scalar_type, elem)
-        elseif name === :abs2
-            # x^2 = x * x
-            return encode_MulFOp!(cb, scalar_type, elem, elem)
-        elseif name === :sqrt
-            return encode_SqrtOp!(cb, scalar_type, elem)
-        elseif name === :exp
-            return encode_ExpOp!(cb, scalar_type, elem)
-        elseif name === :log
-            return encode_LogOp!(cb, scalar_type, elem)
-        elseif name === :sin
-            return encode_SinOp!(cb, scalar_type, elem)
-        elseif name === :cos
-            return encode_CosOp!(cb, scalar_type, elem)
-        elseif name === :neg || name === :-
-            # Unary minus
-            return encode_NegFOp!(cb, scalar_type, elem)
+        if name === :identity || name === :abs || name === :sqrt ||
+           name === :exp || name === :log || name === :sin || name === :cos ||
+           name === :neg || name === :abs2
+            return name
         end
     end
 
-    error("Unsupported map function. Supported: identity, abs, abs2, sqrt, exp, log, sin, cos, unary minus")
+    # Try to evaluate the function
+    fn = extract_function(ctx, f_arg)
+    if fn !== nothing
+        if fn === identity
+            return :identity
+        elseif fn === abs
+            return :abs
+        elseif fn === sqrt
+            return :sqrt
+        elseif fn === exp
+            return :exp
+        elseif fn === log
+            return :log
+        elseif fn === sin
+            return :sin
+        elseif fn === cos
+            return :cos
+        elseif fn === abs
+            return :abs
+        elseif fn === Base.:-
+            return :neg
+        end
+    end
+
+    return nothing
+end
+
+"""
+    try_decompose_expr(ctx, f_arg, elem, scalar_type, elem_type) -> Union{Value, Nothing}
+
+Try to decompose a composite expression into Tile IR operations.
+Returns the final value or nothing if decomposition fails.
+"""
+function try_decompose_expr(ctx::CGCtx, @nospecialize(f_arg), elem::Value, scalar_type::TypeId, ::Type{T}) where T
+    cb = ctx.cb
+
+    # Try to analyze the function
+    if f_arg isa Expr && f_arg.head === :call
+        fn_name = f_arg.args[1]
+        args = f_arg.args[2:end]
+
+        # Case: x + c (addition with constant)
+        if fn_name === :+ && length(args) == 2
+            # Check if one argument is a constant
+            if is_constant_arg(args[1])
+                constant = get_constant_value(args[1])
+                const_val = encode_constant!(ctx, constant, scalar_type, T)
+                return encode_AddFOp!(cb, scalar_type, elem, const_val)
+            elseif is_constant_arg(args[2])
+                constant = get_constant_value(args[2])
+                const_val = encode_constant!(ctx, constant, scalar_type, T)
+                return encode_AddFOp!(cb, scalar_type, elem, const_val)
+            end
+        end
+
+        # Case: x - c (subtraction with constant)
+        if fn_name === :- && length(args) == 2
+            if is_constant_arg(args[1])
+                # c - x
+                constant = get_constant_value(args[1])
+                const_val = encode_constant!(ctx, constant, scalar_type, T)
+                return encode_SubFOp!(cb, scalar_type, const_val, elem)
+            elseif is_constant_arg(args[2])
+                # x - c
+                constant = get_constant_value(args[2])
+                const_val = encode_constant!(ctx, constant, scalar_type, T)
+                return encode_SubFOp!(cb, scalar_type, elem, const_val)
+            end
+        end
+
+        # Case: x * c (multiplication with constant)
+        if fn_name === :* && length(args) == 2
+            if is_constant_arg(args[1])
+                constant = get_constant_value(args[1])
+                const_val = encode_constant!(ctx, constant, scalar_type, T)
+                return encode_MulFOp!(cb, scalar_type, const_val, elem)
+            elseif is_constant_arg(args[2])
+                constant = get_constant_value(args[2])
+                const_val = encode_constant!(ctx, constant, scalar_type, T)
+                return encode_MulFOp!(cb, scalar_type, elem, const_val)
+            end
+        end
+
+        # Case: x / c (division with constant)
+        if fn_name === :/ && length(args) == 2
+            if is_constant_arg(args[2])
+                constant = get_constant_value(args[2])
+                const_val = encode_constant!(ctx, constant, scalar_type, T)
+                return encode_DivFOp!(cb, scalar_type, elem, const_val)
+            end
+        end
+
+        # Case: abs(x) - handled by direct, but for completeness
+        if fn_name === :abs && length(args) == 1
+            return encode_AbsFOp!(cb, scalar_type, elem)
+        end
+
+        # Case: sqrt(x) - handled by direct
+        if fn_name === :sqrt && length(args) == 1
+            return encode_SqrtOp!(cb, scalar_type, elem)
+        end
+
+        # Case: x^2 (power of 2)
+        if fn_name === :^ && length(args) == 3 && args[3] == 2
+            return encode_MulFOp!(cb, scalar_type, elem, elem)
+        end
+
+        # Case: composite: f(g(x)) where both are decomposable
+        if length(args) == 1
+            inner = args[1]
+            if inner isa Expr && inner.head === :call
+                # Try to decompose inner first, then apply outer
+                inner_result = try_decompose_expr(ctx, inner, elem, scalar_type, T)
+                if inner_result !== nothing
+                    # Now apply outer function
+                    return apply_function(ctx, fn_name, inner_result, scalar_type, T)
+                end
+            end
+        end
+    end
+
+    # Try to handle more complex expressions
+    return try_complex_expr_decomposition(ctx, f_arg, elem, scalar_type, T)
+end
+
+"""
+    apply_function(ctx, fn_name, value, scalar_type, elem_type) -> Value
+
+Apply a single-argument function to a value.
+"""
+function apply_function(ctx::CGCtx, fn_name, value::Value, scalar_type::TypeId, ::Type{T}) where T
+    cb = ctx.cb
+
+    if fn_name === :abs
+        return encode_AbsFOp!(cb, scalar_type, value)
+    elseif fn_name === :sqrt
+        return encode_SqrtOp!(cb, scalar_type, value)
+    elseif fn_name === :exp
+        return encode_ExpOp!(cb, scalar_type, value)
+    elseif fn_name === :log
+        return encode_LogOp!(cb, scalar_type, value)
+    elseif fn_name === :sin
+        return encode_SinOp!(cb, scalar_type, value)
+    elseif fn_name === :cos
+        return encode_CosOp!(cb, scalar_type, value)
+    elseif fn_name === :neg || fn_name === :-
+        return encode_NegFOp!(cb, scalar_type, value)
+    else
+        error("Unsupported function: $fn_name")
+    end
+end
+
+"""
+    is_constant_arg(arg) -> Bool
+
+Check if arg is a constant literal.
+"""
+function is_constant_arg(@nospecialize(arg))
+    if arg isa Number
+        return true
+    elseif arg isa Expr
+        # Check for literal expressions like :(1.0)
+        return arg.head === :lit
+    end
+    return false
+end
+
+"""
+    get_constant_value(arg) -> Number
+
+Extract the numeric value from a constant argument.
+"""
+function get_constant_value(@nospecialize(arg))
+    if arg isa Number
+        return arg
+    elseif arg isa Expr && arg.head === :lit
+        return arg.args[1]
+    end
+    error("Not a constant: $arg")
+end
+
+"""
+    encode_constant!(ctx, value, scalar_type, elem_type) -> Value
+
+Encode a constant value as a Tile IR constant operation.
+"""
+function encode_constant!(ctx::CGCtx, value, scalar_type::TypeId, ::Type{T}) where T
+    cb = ctx.cb
+
+    # Convert to the appropriate type
+    typed_value = T(value)
+
+    # Encode as bytes
+    bytes = reinterpret(UInt8, [typed_value])
+
+    # Use ConstantOp to create the constant
+    return encode_ConstantOp!(ctx.cb, scalar_type, collect(bytes))
+end
+
+"""
+    try_complex_expr_decomposition(ctx, f_arg, elem, scalar_type, elem_type) -> Union{Value, Nothing}
+
+Handle more complex expressions that require multiple operations.
+Examples: x^2 + 1, sin(x) + cos(x), (x + 1) * 2, etc.
+"""
+function try_complex_expr_decomposition(ctx::CGCtx, @nospecialize(f_arg), elem::Value, scalar_type::TypeId, ::Type{T}) where T
+    cb = ctx.cb
+
+    if f_arg isa Expr
+        # Pattern: x^2 (special case of x*x)
+        if f_arg.head === :call && f_arg.args[1] === :^ && length(f_arg.args) == 3
+            if f_arg.args[3] == 2
+                return encode_MulFOp!(cb, scalar_type, elem, elem)
+            end
+        end
+
+        # Pattern: f(x) op c where op is +, -, *, /
+        if f_arg.head === :call && length(f_arg.args) == 3
+            return try_binary_expr_decomposition(ctx, f_arg, elem, scalar_type, T)
+        end
+
+        # Pattern: f(g(x)) - nested function calls
+        if f_arg.head === :call && length(f_arg.args) == 2
+            inner_fn = f_arg.args[1]
+            inner_arg = f_arg.args[2]
+
+            if inner_arg isa Symbol || (inner_arg isa Expr && inner_arg.head === :call)
+                # Recursively decompose
+                inner_result = try_decompose_expr(ctx, inner_arg, elem, scalar_type, T)
+                if inner_result !== nothing
+                    return apply_function(ctx, inner_fn, inner_result, scalar_type, T)
+                end
+            end
+        end
+
+        # Pattern: f(x) + g(x) (binary operation of two function applications)
+        if f_arg.head === :call && length(f_arg.args) == 3
+            left = f_arg.args[1]
+            op = f_arg.args[2]
+            right = f_arg.args[3]
+
+            # Check if it's a composite expression like sin(x) + cos(x)
+            if op isa Symbol && (op === :+ || op === :- || op === :* || op === :/)
+                # Try to decompose both sides
+                left_val = try_decompose_expr(ctx, left, elem, scalar_type, T)
+                right_val = try_decompose_expr(ctx, right, elem, scalar_type, T)
+
+                if left_val !== nothing && right_val !== nothing
+                    if op === :+
+                        return encode_AddFOp!(cb, scalar_type, left_val, right_val)
+                    elseif op === :-
+                        return encode_SubFOp!(cb, scalar_type, left_val, right_val)
+                    elseif op === :*
+                        return encode_MulFOp!(cb, scalar_type, left_val, right_val)
+                    elseif op === :/
+                        return encode_DivFOp!(cb, scalar_type, left_val, right_val)
+                    end
+                end
+            end
+        end
+    end
+
+    return nothing
+end
+
+"""
+    try_binary_expr_decomposition(ctx, f_arg, elem, scalar_type, elem_type) -> Union{Value, Nothing}
+
+Decompose binary expressions like (x + c) or (c * x).
+"""
+function try_binary_expr_decomposition(ctx::CGCtx, @nospecialize(f_arg), elem::Value, scalar_type::TypeId, ::Type{T}) where T
+    cb = ctx.cb
+
+    left = f_arg.args[1]
+    op = f_arg.args[2]
+    right = f_arg.args[3]
+
+    # Case 1: (x op c) where op is +, -, *, /
+    if left isa Symbol  # x is a variable
+        if is_constant_arg(right)
+            constant = get_constant_value(right)
+            const_val = encode_constant!(ctx, constant, scalar_type, T)
+
+            if op === :+
+                return encode_AddFOp!(cb, scalar_type, elem, const_val)
+            elseif op === :-
+                return encode_SubFOp!(cb, scalar_type, elem, const_val)
+            elseif op === :*
+                return encode_MulFOp!(cb, scalar_type, elem, const_val)
+            elseif op === :/
+                return encode_DivFOp!(cb, scalar_type, elem, const_val)
+            end
+        end
+    end
+
+    # Case 2: (c op x) where x is variable
+    if right isa Symbol  # x is a variable
+        if is_constant_arg(left)
+            constant = get_constant_value(left)
+            const_val = encode_constant!(ctx, constant, scalar_type, T)
+
+            if op === :+
+                return encode_AddFOp!(cb, scalar_type, const_val, elem)
+            elseif op === :*
+                return encode_MulFOp!(cb, scalar_type, const_val, elem)
+            elseif op === :-
+                return encode_SubFOp!(cb, scalar_type, const_val, elem)
+            elseif op === :/
+                return encode_DivFOp!(cb, scalar_type, const_val, elem)
+            end
+        end
+    end
+
+    # Case 3: (f(x) op c) where f(x) needs decomposition
+    left_decomposed = try_decompose_expr(ctx, left, elem, scalar_type, T)
+    if left_decomposed !== nothing && is_constant_arg(right)
+        constant = get_constant_value(right)
+        const_val = encode_constant!(ctx, constant, scalar_type, T)
+
+        if op === :+
+            return encode_AddFOp!(cb, scalar_type, left_decomposed, const_val)
+        elseif op === :-
+            return encode_SubFOp!(cb, scalar_type, left_decomposed, const_val)
+        elseif op === :*
+            return encode_MulFOp!(cb, scalar_type, left_decomposed, const_val)
+        elseif op === :/
+            return encode_DivFOp!(cb, scalar_type, left_decomposed, const_val)
+        end
+    end
+
+    # Case 4: (c op f(x))
+    right_decomposed = try_decompose_expr(ctx, right, elem, scalar_type, T)
+    if right_decomposed !== nothing && is_constant_arg(left)
+        constant = get_constant_value(left)
+        const_val = encode_constant!(ctx, constant, scalar_type, T)
+
+        if op === :+
+            return encode_AddFOp!(cb, scalar_type, const_val, right_decomposed)
+        elseif op === :-
+            return encode_SubFOp!(cb, scalar_type, const_val, right_decomposed)
+        elseif op === :*
+            return encode_MulFOp!(cb, scalar_type, const_val, right_decomposed)
+        elseif op === :/
+            return encode_DivFOp!(cb, scalar_type, const_val, right_decomposed)
+        end
+    end
+
+    return nothing
 end
 
 """
