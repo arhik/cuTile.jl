@@ -63,9 +63,9 @@ function matmul_kernel(A::ct.TileArray{T,2}, B::ct.TileArray{T,2}, C::ct.TileArr
     return nothing
 end
 
-#=============================================================================
- Example harness
-=============================================================================#
+# ============================================================================
+#  Example harness
+# =============================================================================#
 
 function prepare(; benchmark::Bool=false,
                   M::Int=benchmark ? 4096 : 256,
@@ -104,9 +104,9 @@ function verify(data, result)
     @assert isapprox(Array(result.C), expected, rtol=1e-2, atol=1e-2) "max diff: $(maximum(abs.(Array(result.C) - expected)))"
 end
 
-#=============================================================================
- Reference implementations for benchmarking
-=============================================================================#
+# ============================================================================
+#  Reference implementations for benchmarking
+# =============================================================================#
 
 function run_others(data; nruns::Int=1, warmup::Int=0)
     (; A, B) = data
@@ -128,9 +128,9 @@ function run_others(data; nruns::Int=1, warmup::Int=0)
     return results
 end
 
-#=============================================================================
- Main
-=============================================================================#
+# ============================================================================
+#  Main
+# =============================================================================#
 
 function test_matmul(::Type{T}, M, N, K, tm, tn, tk; name=nothing) where T
     name = something(name, "matmul ($M x $K) @ ($K x $N), $T, tiles=$tm x $tn x $tk")

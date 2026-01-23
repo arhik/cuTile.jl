@@ -44,9 +44,9 @@ def matmul_cutile_kernel(A, B, C, tm: ct.Constant[int], tn: ct.Constant[int], tk
     ct.store(C, index=(bidx, bidy), tile=accumulator)
 
 
-#=============================================================================
+# ============================================================================
 # Example harness
-#=============================================================================
+# ============================================================================
 
 def prepare(*, benchmark: bool = False, M: int = None, N: int = None, K: int = None, dtype=np.float32):
     """Allocate and initialize data for matmul."""
@@ -103,9 +103,9 @@ def verify(data, result):
         f"matmul incorrect! max diff: {np.max(np.abs(cp.asnumpy(result['C']) - expected))}"
 
 
-#=============================================================================
+# ============================================================================
 # Reference implementations for benchmarking
-#=============================================================================
+# ============================================================================
 
 def run_others(data, *, nruns: int = 1, warmup: int = 0):
     """Run reference implementations for comparison."""
@@ -135,9 +135,9 @@ def run_others(data, *, nruns: int = 1, warmup: int = 0):
     return results
 
 
-#=============================================================================
+# ============================================================================
 # Main
-#=============================================================================
+# ============================================================================
 
 def test_matmul(M, N, K, tm, tn, tk, dtype=np.float32, name=None):
     """Test matmul with given parameters."""

@@ -107,9 +107,9 @@ def fft_make_twiddles(factors, precision, device):
     return (W0, W1, W2, T0, T1)
 
 
-#=============================================================================
+# ============================================================================
 # Example harness
-#=============================================================================
+# ============================================================================
 
 def prepare(*, benchmark: bool = False, batch: int = None, size: int = None, factors: tuple = None, atom_packing_dim: int = 2):
     """Allocate and initialize data for FFT."""
@@ -186,9 +186,9 @@ def verify(data, result):
         f"FFT incorrect! max diff: {torch.max(torch.abs(result['output'] - reference))}"
 
 
-#=============================================================================
+# ============================================================================
 # Reference implementations for benchmarking
-#=============================================================================
+# ============================================================================
 
 def run_others(data, *, nruns: int = 1, warmup: int = 0):
     """Run reference implementations for comparison."""
@@ -214,9 +214,9 @@ def run_others(data, *, nruns: int = 1, warmup: int = 0):
     return results
 
 
-#=============================================================================
+# ============================================================================
 # Main
-#=============================================================================
+# ============================================================================
 
 def test_fft(batch, size, factors, name=None):
     """Test FFT with given parameters."""

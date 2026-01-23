@@ -9,9 +9,9 @@ import numpy as np
 import cuda.tile as ct
 from math import ceil
 
-#=============================================================================
+# ============================================================================
 # Forward Kernel
-#=============================================================================
+# ============================================================================
 
 @ct.kernel
 def layernorm_fwd_kernel(X, W, B, Y, Mean, Rstd, eps: ct.Constant[float], TILE_N: ct.Constant[int]):
@@ -49,9 +49,9 @@ def layernorm_fwd_kernel(X, W, B, Y, Mean, Rstd, eps: ct.Constant[float], TILE_N
         ct.store(Y, index=(bid_m, j), tile=ty.astype(Y.dtype))
 
 
-#=============================================================================
+# ============================================================================
 # Backward Kernels
-#=============================================================================
+# ============================================================================
 
 def bwd_helper(X, W, DY, bid_m, j, mean, rstd, TILE_N, N):
     """Helper to load data and compute common backward terms."""
@@ -124,9 +124,9 @@ def layernorm_bwd_dwdb_kernel(DW, DB, FINAL_DW, FINAL_DB, TILE_M: ct.Constant[in
     ct.store(FINAL_DB, index=(bid_n,), tile=sum_db.astype(FINAL_DB.dtype))
 
 
-#=============================================================================
+# ============================================================================
 # Example harness
-#=============================================================================
+# ============================================================================
 
 def prepare(*, benchmark: bool = False, M: int = None, N: int = None, eps: float = 1e-5, GROUP_SIZE_M: int = 64, dtype=np.float32):
     """Allocate all data for forward and backward passes."""
@@ -257,9 +257,9 @@ def verify(data, result):
 # No run_others for layernorm - no simple reference implementation to compare against
 
 
-#=============================================================================
+# ============================================================================
 # Main
-#=============================================================================
+# ============================================================================
 
 def test_layernorm(M, N, tile_n, tile_m=32, eps=1e-5, dtype=np.float32, name=None):
     """Test layer normalization (fwd+bwd) with given parameters."""

@@ -576,9 +576,9 @@ function emit_reduce!(ctx::CGCtx, args, reduce_fn::Symbol)
     CGVal(results[1], output_tile_type, Tile{elem_type, Tuple(output_shape)}, output_shape)
 end
 
-#=============================================================================#
-# Reduce Identity Values via Dispatch
-#=============================================================================#
+#============================================================================
+ Reduce Identity Values via Dispatch
+============================================================================#
 
 """
     operation_identity(fn, dtype, elem_type) -> IdentityVal
@@ -617,9 +617,21 @@ operation_identity(::Val{:max}, dtype, ::Type{T}) where T <: AbstractFloat =
 operation_identity(::Val{:max}, dtype, ::Type{T}) where T <: Integer =
     IntegerIdentityVal(to_uint128(typemin(T)), dtype, T)
 
-#=============================================================================#
-# Reduce Body Operations
-#=============================================================================#
+# Multiplication identity: 1 * x = x
+operation_identity(::Val{:mul}, dtype, ::Type{T}) where T <: AbstractFloat =
+    FloatIdentityVal(one(T), dtype, T)
+operation_identity(::Val{:mul}, dtype, ::Type{T}) where T <: Integer =
+    IntegerIdentityVal(to_uint128(one(T)), dtype, T)
+
+# Minimum identity: min(typemax(T), x) = x
+operation_identity(::Val{:min}, dtype, ::Type{T}) where T <: AbstractFloat =
+    FloatIdentityVal(typemax(T), dtype, T)
+operation_identity(::Val{:min}, dtype, ::Type{T}) where T <: Integer =
+    IntegerIdentityVal(to_uint128(typemax(T)), dtype, T)
+
+#============================================================================
+ Reduce Body Operations
+============================================================================#
 function encode_reduce_body(cb, type, acc, elem, op::Symbol, ::Type{T}) where T
     if T <: AbstractFloat
         if op == :add
@@ -737,3 +749,257 @@ function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.select), args)
 end
 
 # TODO: cuda_tile.unpack
+
+#=============================================================================
+ MapReduce operations
+=============================================================================#
+
+"""
+    emit_mapreduce!(ctx, args) -> CGVal
+
+Emit bytecode for mapreduce operation.
+Args: [f, op, tile, axis, init?]
+
+The mapreduce operation applies f to each element, then reduces with op.
+"""
+function emit_mapreduce!(ctx::CGCtx, args::Vector{Any})
+    cb = ctx.cb
+    tt = ctx.tt
+
+    # Get arguments - handle optional init
+    f_arg = args[1]
+    op_arg = args[2]
+    tile_tv = emit_value!(ctx, args[3])
+    tile_tv === nothing && error("Cannot resolve input tile for mapreduce")
+
+    # Get axis from Val argument
+    axis_val = @something get_constant(ctx, args[4]) error("Reduction axis must be a compile-time constant")
+    axis = axis_val
+
+    # Optional init
+    init_present = length(args) > 4
+    init_tv = init_present ? emit_value!(ctx, args[5]) : nothing
+
+    # Get element type and shapes
+    input_type = unwrap_type(tile_tv.jltype)
+    elem_type = input_type.parameters[1]
+    input_shape = tile_tv.shape
+    isempty(input_shape) && error("Cannot reduce scalar tile with mapreduce")
+
+    # Compute output shape (dimension at axis is removed)
+    output_shape = Int[input_shape[i] for i in eachindex(input_shape) if i != axis + 1]
+
+    # Create types
+    dtype = julia_to_tile_dtype!(tt, elem_type)
+    output_tile_type = tile_type!(tt, dtype, output_shape)
+    scalar_tile_type = tile_type!(tt, dtype, Int[])
+
+    # Determine reduction function and identity
+    reduce_fn, identity = determine_reduction_fn(ctx, op_arg, dtype, elem_type)
+
+    # Encode the reduction with custom body
+    results = encode_ReduceOp!(cb, [output_tile_type], [tile_tv.v], axis, [identity], [scalar_tile_type]) do block_args
+        acc, elem = block_args[1], block_args[2]
+
+        # Body: result = op(acc, f(elem))
+        # Step 1: Apply map function f to element
+        mapped = emit_map_body!(ctx, f_arg, elem, scalar_tile_type, elem_type)
+
+        # Step 2: Apply reduction function op to (acc, mapped)
+        result = emit_reduce_body!(ctx, op_arg, acc, mapped, scalar_tile_type, elem_type)
+
+        encode_YieldOp!(cb, [result])
+    end
+
+    CGVal(results[1], output_tile_type, Tile{elem_type, Tuple(output_shape)}, output_shape)
+end
+
+"""
+    determine_reduction_fn(op_arg, dtype, elem_type) -> (Symbol, IdentityVal)
+
+Identify the reduction function from the op argument.
+Returns (function_name, identity_value).
+"""
+function determine_reduction_fn(@nospecialize(op_arg), dtype, ::Type{T}) where T
+    # Try to extract the function from various argument forms
+    fn = extract_function(op_arg)
+
+    if fn !== nothing
+        # Known function: match and return appropriate identity
+        if fn === (+)
+            return :add, operation_identity(Val(:add), dtype, T)
+        elseif fn === (*)
+            return :mul, operation_identity(Val(:mul), dtype, T)
+        elseif fn === max
+            return :max, operation_identity(Val(:max), dtype, T)
+        elseif fn === min
+            return :min, operation_identity(Val(:min), dtype, T)
+        end
+    end
+
+    # Unknown function - try to get name from GlobalRef
+    if op_arg isa GlobalRef
+        name = op_arg.name
+        if name === :+
+            return :add, operation_identity(Val(:add), dtype, T)
+        elseif name === :*
+            return :mul, operation_identity(Val(:mul), dtype, T)
+        elseif name === :max
+            return :max, operation_identity(Val(:max), dtype, T)
+        elseif name === :min
+            return :min, operation_identity(Val(:min), dtype, T)
+        end
+    end
+
+    error("Unsupported reduction function. Supported: +, *, max, min")
+end
+
+"""
+    extract_function(ctx, arg) -> Union{Function, Nothing}
+
+Extract a Function value from various IR forms.
+"""
+function extract_function(ctx::CGCtx, @nospecialize(arg))
+    if arg isa Core.Builtin
+        # Handle built-in functions
+        if arg === Core.add
+            return (+)
+        elseif arg === Core.mul
+            return (*)
+        end
+        return nothing
+    elseif arg isa GlobalRef
+        # Try to evaluate the global reference
+        try
+            return Core.eval(arg.mod, arg.name)
+        catch
+            return nothing
+        end
+    elseif arg isa SSAValue
+        # Look up in context values
+        tv = get(ctx.values, arg.id, nothing)
+        if tv !== nothing && tv.constant !== nothing
+            return something(tv.constant)
+        end
+        return nothing
+    end
+    return nothing
+end
+
+"""
+    emit_map_body!(ctx, f_arg, elem, scalar_type, elem_type) -> Value
+
+Emit bytecode for the map function f applied to element.
+"""
+function emit_map_body!(ctx::CGCtx, @nospecialize(f_arg), elem::Value, scalar_type::TypeId, ::Type{T}) where T
+    cb = ctx.cb
+
+    # Try to identify the map function
+    fn = extract_function(ctx, f_arg)
+
+    # Handle known functions
+    if fn !== nothing
+        if fn === identity
+            return elem
+        elseif fn === abs
+            return encode_AbsFOp!(cb, scalar_type, elem)
+        elseif fn === sqrt
+            return encode_SqrtOp!(cb, scalar_type, elem)
+        elseif fn === exp
+            return encode_ExpOp!(cb, scalar_type, elem)
+        elseif fn === log
+            return encode_LogOp!(cb, scalar_type, elem)
+        elseif fn === sin
+            return encode_SinOp!(cb, scalar_type, elem)
+        elseif fn === cos
+            return encode_CosOp!(cb, scalar_type, elem)
+        end
+    end
+
+    # Check GlobalRef for common functions
+    if f_arg isa GlobalRef
+        name = f_arg.name
+        if name === :identity
+            return elem
+        elseif name === :abs
+            return encode_AbsFOp!(cb, scalar_type, elem)
+        elseif name === :abs2
+            # x^2 = x * x
+            return encode_MulFOp!(cb, scalar_type, elem, elem)
+        elseif name === :sqrt
+            return encode_SqrtOp!(cb, scalar_type, elem)
+        elseif name === :exp
+            return encode_ExpOp!(cb, scalar_type, elem)
+        elseif name === :log
+            return encode_LogOp!(cb, scalar_type, elem)
+        elseif name === :sin
+            return encode_SinOp!(cb, scalar_type, elem)
+        elseif name === :cos
+            return encode_CosOp!(cb, scalar_type, elem)
+        elseif name === :neg || name === :-
+            # Unary minus
+            return encode_NegFOp!(cb, scalar_type, elem)
+        end
+    end
+
+    error("Unsupported map function. Supported: identity, abs, abs2, sqrt, exp, log, sin, cos, unary minus")
+end
+
+"""
+    emit_reduce_body!(ctx, op_arg, acc, elem, scalar_type, elem_type) -> Value
+
+Emit bytecode for the reduction function op applied to (acc, elem).
+"""
+function emit_reduce_body!(ctx::CGCtx, @nospecialize(op_arg), acc::Value, elem::Value, scalar_type::TypeId, ::Type{T}) where T
+    cb = ctx.cb
+
+    # Try to identify the reduction function
+    fn = extract_function(ctx, op_arg)
+
+    # Handle known functions
+    if fn !== nothing
+        if fn === (+)
+            return encode_AddFOp!(cb, scalar_type, acc, elem)
+        elseif fn === (*)
+            return encode_MulFOp!(cb, scalar_type, acc, elem)
+        elseif fn === max
+            return encode_MaxFOp!(cb, scalar_type, acc, elem)
+        elseif fn === min
+            return encode_MinFOp!(cb, scalar_type, acc, elem)
+        end
+    end
+
+    # Check GlobalRef for common functions
+    if op_arg isa GlobalRef
+        name = op_arg.name
+        if name === :+
+            return encode_AddFOp!(cb, scalar_type, acc, elem)
+        elseif name === :*
+            return encode_MulFOp!(cb, scalar_type, acc, elem)
+        elseif name === :max
+            return encode_MaxFOp!(cb, scalar_type, acc, elem)
+        elseif name === :min
+            return encode_MinFOp!(cb, scalar_type, acc, elem)
+        end
+    end
+
+    error("Unsupported reduction function. Supported: +, *, max, min")
+end
+
+# Define mapreduce intrinsic
+@eval Intrinsics begin
+    """
+        mapreduce(f, op, tile, axis_val; init=nothing)
+
+    Apply f to each element, then reduce with op.
+    Axis is 0-indexed (converted from 1-indexed in public API).
+    """
+    @noinline function mapreduce(f::Function, op::Function, tile::Tile{T, S}, ::Val{axis}; init=nothing) where {T, S, axis}
+        reduced_shape = ntuple(i -> S[i < axis + 1 ? i : i + 1], length(S) - 1)
+        Tile{T, reduced_shape}()
+    end
+end
+
+function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.mapreduce), args)
+    emit_mapreduce!(ctx, args)
+end

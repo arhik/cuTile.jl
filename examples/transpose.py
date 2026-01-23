@@ -3,12 +3,15 @@
 Matrix Transpose example - cuTile Python
 """
 
+import cuda.tile as ct
 import cupy as cp
 import numpy as np
-import cuda.tile as ct
+
 
 @ct.kernel
-def transpose_cutile_kernel(input, output, tile_m: ct.Constant[int], tile_n: ct.Constant[int]):
+def transpose_cutile_kernel(
+    input, output, tile_m: ct.Constant[int], tile_n: ct.Constant[int]
+):
     pid_m = ct.bid(0)
     pid_n = ct.bid(1)
     tile = ct.load(input, index=(pid_m, pid_n), shape=(tile_m, tile_n))
@@ -16,9 +19,10 @@ def transpose_cutile_kernel(input, output, tile_m: ct.Constant[int], tile_n: ct.
     ct.store(output, index=(pid_n, pid_m), tile=tile_t)
 
 
-#=============================================================================
+# ============================================================================
 # Example harness
-#=============================================================================
+# ============================================================================
+
 
 def prepare(*, benchmark: bool = False, M: int = None, N: int = None, dtype=np.float32):
     """Allocate and initialize data for transpose."""
@@ -30,7 +34,7 @@ def prepare(*, benchmark: bool = False, M: int = None, N: int = None, dtype=np.f
         "input": cp.random.rand(M, N).astype(dtype),
         "output": cp.empty((N, M), dtype=dtype),
         "M": M,
-        "N": N
+        "N": N,
     }
 
 
@@ -45,7 +49,12 @@ def run(data, *, tile_m: int = 64, tile_n: int = 64, nruns: int = 1, warmup: int
 
     # Warmup
     for _ in range(warmup):
-        ct.launch(stream, grid, transpose_cutile_kernel, (input_arr, output_arr, tile_m, tile_n))
+        ct.launch(
+            stream,
+            grid,
+            transpose_cutile_kernel,
+            (input_arr, output_arr, tile_m, tile_n),
+        )
     cp.cuda.runtime.deviceSynchronize()
 
     # Timed runs
@@ -54,7 +63,12 @@ def run(data, *, tile_m: int = 64, tile_n: int = 64, nruns: int = 1, warmup: int
         start = cp.cuda.Event()
         end = cp.cuda.Event()
         start.record(stream)
-        ct.launch(stream, grid, transpose_cutile_kernel, (input_arr, output_arr, tile_m, tile_n))
+        ct.launch(
+            stream,
+            grid,
+            transpose_cutile_kernel,
+            (input_arr, output_arr, tile_m, tile_n),
+        )
         end.record(stream)
         end.synchronize()
         times.append(cp.cuda.get_elapsed_time(start, end))  # ms
@@ -68,9 +82,10 @@ def verify(data, result):
     assert np.allclose(cp.asnumpy(result["output"]), expected), "transpose incorrect!"
 
 
-#=============================================================================
+# ============================================================================
 # Reference implementations for benchmarking
-#=============================================================================
+# ============================================================================
+
 
 def run_others(data, *, nruns: int = 1, warmup: int = 0):
     """Run reference implementations for comparison."""
@@ -100,13 +115,16 @@ def run_others(data, *, nruns: int = 1, warmup: int = 0):
     return results
 
 
-#=============================================================================
+# ============================================================================
 # Main
-#=============================================================================
+# ============================================================================
+
 
 def test_transpose(M, N, tile_m, tile_n, dtype=np.float32, name=None):
     """Test transpose with given parameters."""
-    name = name or f"transpose ({M}x{N}), tiles={tile_m}x{tile_n}, dtype={dtype.__name__}"
+    name = (
+        name or f"transpose ({M}x{N}), tiles={tile_m}x{tile_n}, dtype={dtype.__name__}"
+    )
     print(f"--- {name} ---")
     data = prepare(M=M, N=N, dtype=dtype)
     result = run(data, tile_m=tile_m, tile_n=tile_n)

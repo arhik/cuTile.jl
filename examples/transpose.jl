@@ -17,7 +17,7 @@ function transpose_kernel(x::ct.TileArray{T,2}, y::ct.TileArray{T,2},
     return
 end
 
-#=============================================================================
+# ============================================================================
  Example harness
 =============================================================================#
 
@@ -56,9 +56,9 @@ function verify(data, result)
     @assert Array(result.y) ≈ transpose(Array(data.x))
 end
 
-#=============================================================================
- Reference implementations for benchmarking
-=============================================================================#
+# ============================================================================
+#  Reference implementations for benchmarking
+# =============================================================================#
 
 # Simple SIMT transpose kernel (naive, no shared memory)
 function simt_naive_kernel(x, y, m, n)
@@ -104,9 +104,9 @@ function run_others(data; nruns::Int=1, warmup::Int=0)
     return results
 end
 
-#=============================================================================
- Main
-=============================================================================#
+# ============================================================================
+#  Main
+# =============================================================================#
 
 function test_transpose(::Type{T}, m, n, tm, tn; name=nothing) where T
     name = something(name, "transpose ($m x $n, $T, tiles=$tm x $tn)")

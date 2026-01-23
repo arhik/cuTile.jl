@@ -7,7 +7,7 @@ import cuTile as ct
 
 const ConstInt = ct.Constant{Int}
 
-#=============================================================================
+# ============================================================================
  LayerNorm Forward Kernel
 
  Forward pass: computes mean/var, normalizes input, and applies affine transform.
@@ -71,7 +71,7 @@ function layer_norm_fwd(X::ct.TileArray{Float32, 2}, W::ct.TileArray{Float32, 1}
     return
 end
 
-#=============================================================================
+# ============================================================================
  LayerNorm Backward Kernels
 
  Backward pass: computes gradients for LayerNorm.
@@ -272,7 +272,7 @@ function layer_norm_bwd_dwdb(DW::ct.TileArray{Float32, 2}, DB::ct.TileArray{Floa
     return
 end
 
-#=============================================================================
+# ============================================================================
  Example harness
 =============================================================================#
 
@@ -386,7 +386,7 @@ end
 
 # No run_others for layernorm - no simple reference implementation to compare against
 
-#=============================================================================
+# ============================================================================
  Main
 =============================================================================#
 

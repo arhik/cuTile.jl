@@ -44,9 +44,9 @@ def vadd_kernel_1d_gather(a, b, c, tile_size: ct.Constant[int]):
     ct.scatter(c, indices, result)
 
 
-#=============================================================================
+# ============================================================================
 # Example harness
-#=============================================================================
+# ============================================================================
 
 def prepare(*, benchmark: bool = False, shape: tuple = None, use_gather: bool = False, dtype=np.float32):
     """Allocate and initialize data for vector addition."""
@@ -116,9 +116,9 @@ def verify(data, result):
     assert np.allclose(cp.asnumpy(result["c"]), expected), "vadd incorrect!"
 
 
-#=============================================================================
+# ============================================================================
 # Reference implementations for benchmarking
-#=============================================================================
+# ============================================================================
 
 def run_others(data, *, nruns: int = 1, warmup: int = 0):
     """Run reference implementations for comparison."""
@@ -150,9 +150,9 @@ def run_others(data, *, nruns: int = 1, warmup: int = 0):
     return results
 
 
-#=============================================================================
+# ============================================================================
 # Main
-#=============================================================================
+# ============================================================================
 
 def test_vadd(shape, tile, use_gather=False, dtype=np.float32, name=None):
     """Test vector addition with given parameters."""
