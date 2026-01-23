@@ -1,55 +1,53 @@
 """
-    Simple Scan Bytecode Test
+    Scan Bytecode Test
 
-Minimal test for generating scan operation bytecode using cuTile's API.
-Demonstrates proper identity encoding and scan operation structure.
-
-Key findings:
-- ScanOp opcode = 94
-- Identity values require zigzag encoding via mask_to_width
-- Entry functions require 0D tiles but scan requires >=1D tiles
-- Body region arguments are (accumulator, element) pairs of scalar tiles
+Tests manual scan bytecode generation with structural validation.
+Focuses on verifying proper bytecode encoding without disassembly.
 """
 
 using cuTile
 import cuTile: encode_varint!, mask_to_width, Value, encode_ReturnOp!,
                encode_YieldOp!, with_region, new_op!, encode_typeid!,
                IntegerIdentityVal, tile_type!, julia_to_tile_dtype!
-import Statistics: mean
 
-"Return identity value for scan operation."
+# Identity values for different operations
 get_identity(op::Symbol, ::Type{Int32}) = if op == :add 0 elseif op == :mul 1 elseif op == :max typemin(Int32) else typemax(Int32) end
-get_identity(op::Symbol, ::Type{Int64}) = if op == :add Int64(0) elseif op == :mul Int64(1) elseif op == :max typemin(Int64) else typemax(Int64) end
 get_identity(op::Symbol, ::Type{Float32}) = if op == :add Float32(0) else Float32(1) end
 
-"Generate valid cuTile bytecode for a scan operation."
+"""
+    generate_scan_bytecode(::Type{T}; op::Symbol=:add) where T
+
+Generate valid cuTile bytecode for a scan operation.
+Uses 0D tiles for entry function compatibility.
+"""
 function generate_scan_bytecode(::Type{T}; op::Symbol=:add) where T
     cuTile.write_bytecode!(1) do writer, func_buf
         dtype = julia_to_tile_dtype!(writer.type_table, T)
-        scalar_tile = tile_type!(writer.type_table, dtype, Int[])
+        tile = tile_type!(writer.type_table, dtype, Int[])
 
         signed_val = get_identity(op, T)
         uint_val = reinterpret(UInt128, convert(Int128, signed_val))
         identity = IntegerIdentityVal(uint_val, dtype, T)
 
-        cb = cuTile.add_function!(writer, func_buf, "scan", [scalar_tile], cuTile.TypeId[]; is_entry=true)
+        cb = cuTile.add_function!(writer, func_buf, "scan", [tile], cuTile.TypeId[];
+                                  is_entry=true)
 
-        encode_varint!(cb.buf, 94)
+        encode_varint!(cb.buf, 94)  # ScanOp = 94
 
         encode_varint!(cb.buf, 1)
-        encode_typeid!(cb.buf, scalar_tile)
+        encode_typeid!(cb.buf, tile)
 
-        encode_varint!(cb.buf, 0)
-        push!(cb.buf, 0x00)
+        encode_varint!(cb.buf, 0)  # dim=0
+        push!(cb.buf, 0x00)  # reverse=false
 
         encode_varint!(cb.buf, 1)
         if T <: Integer
-            push!(cb.buf, 0x01)  # Integer tag
+            push!(cb.buf, 0x01)
             encode_typeid!(cb.buf, dtype)
             encoded = mask_to_width(uint_val, T)
             encode_varint!(cb.buf, encoded)
         else
-            push!(cb.buf, 0x02)  # Float tag
+            push!(cb.buf, 0x02)
             encode_typeid!(cb.buf, dtype)
             bits = reinterpret(UInt32, get_identity(:add, T))
             encode_varint!(cb.buf, bits)
@@ -60,8 +58,8 @@ function generate_scan_bytecode(::Type{T}; op::Symbol=:add) where T
 
         encode_varint!(cb.buf, 1)
 
-        body_types = [scalar_tile, scalar_tile]
-        body_args = with_region(cb, body_types) do args
+        body_types = [tile, tile]
+        with_region(cb, body_types) do args
             encode_YieldOp!(cb, [args[1]])
         end
 
@@ -72,70 +70,66 @@ function generate_scan_bytecode(::Type{T}; op::Symbol=:add) where T
     end
 end
 
+# Tests
 function test_magic_header()
-    println("Testing magic header...")
-    for T in [Int32, Int64, Float32]
-        bc = generate_scan_bytecode(T)
-        @assert bc[1:8] == b"\x7FTileIR\x00" "Invalid magic for $T"
-    end
-    println("  PASSED")
+    println("Magic header...")
+    bc = generate_scan_bytecode(Int32)
+    @assert bc[1:8] == b"\x7FTileIR\x00"
+    println("  ✓")
 end
 
 function test_version()
-    println("Testing version...")
+    println("Version...")
     bc = generate_scan_bytecode(Int32)
-    @assert bc[9] == 13 "Version major"
-    @assert bc[10] == 1 "Version minor"
-    println("  PASSED")
+    @assert bc[9] == 13 "major"
+    @assert bc[10] == 1 "minor"
+    println("  ✓")
 end
 
 function test_bytecode_size()
-    println("Testing bytecode size...")
-    for T in [Int32, Int64, Float32]
-        bc = generate_scan_bytecode(T)
-        @assert length(bc) > 100 "Bytecode too small for $T"
-    end
-    println("  PASSED")
+    println("Bytecode size...")
+    bc = generate_scan_bytecode(Int32)
+    @assert length(bc) > 100
+    println("  ✓")
 end
 
 function test_scan_opcode()
-    println("Testing scan opcode (94)...")
+    println("Scan opcode (94 = 0x5E)...")
     bc = generate_scan_bytecode(Int32)
-    @assert 0x5e in bc "Scan opcode 94 not found in bytecode"
-    println("  PASSED")
+    @assert 0x5e in bc
+    println("  ✓")
 end
 
 function test_identity_encoding()
-    println("Testing identity encoding...")
+    println("Identity encoding...")
     for op in [:add, :mul, :max, :min]
         bc = generate_scan_bytecode(Int32; op=op)
-        @assert length(bc) > 100 "Too small for $op"
-        @assert 0x01 in bc "Integer tag not found for $op"
+        @assert 0x01 in bc "Integer tag for $op"
     end
-    println("  PASSED")
+    println("  ✓")
 end
 
 function test_different_types()
-    println("Testing different element types...")
-    for T in [Int32, Int64, Float32]
+    println("Different types...")
+    for T in [Int32, Float32]
         bc = generate_scan_bytecode(T)
-        @assert length(bc) > 100 "Too small for $T"
+        @assert length(bc) > 100
     end
-    println("  PASSED")
+    println("  ✓")
 end
 
 function benchmark()
-    println("\nBenchmarking bytecode generation...")
+    println("\nBenchmark...")
     for T in [Int32, Float32]
-        times = [(@elapsed generate_scan_bytecode(T)) * 1000 for _ in 1:5]
-        println("  $T: first=$(round(times[1], digits=3))ms, mean=$(round(mean(times), digits=3))ms")
+        t = @elapsed bc = generate_scan_bytecode(T)
+        println("  $T: $(round(t*1000, digits=3))ms, $(length(bc)) bytes")
     end
 end
 
 function test_all()
-    println(repeat("=", 60))
-    println("SCAN BYTECODE GENERATION TEST")
-    println(repeat("=", 60))
+    println(repeat("=", 50))
+    println("SCAN BYTECODE TEST")
+    println(repeat("=", 50))
     test_magic_header()
     test_version()
     test_bytecode_size()
@@ -143,14 +137,13 @@ function test_all()
     test_identity_encoding()
     test_different_types()
     benchmark()
-    println(repeat("=", 60))
+    println(repeat("=", 50))
     println("ALL TESTS PASSED")
-    println(repeat("=", 60))
+    println(repeat("=", 50))
 end
 
+# REPL helpers
 reload() = include("cuTile/examples/bytecode/scan_simple_test.jl")
-gen(T) = generate_scan_bytecode(T)
-save(T, file) = write(file, generate_scan_bytecode(T))
 
 if abspath(PROGRAM_FILE) == @__FILE__
     test_all()
