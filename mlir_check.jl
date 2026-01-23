@@ -40,6 +40,7 @@ function test1a(a::ct.TileArray{Float32, 2, spec2d}, b::ct.TileArray{Float32, 1,
     pid = ct.bid(1)
     tile = ct.load(a, pid, (4, 16))
     ct.mapreduce(identity, +, tile, 2)
+    return
 end
 ct.code_tiled(test1a, Tuple{ct.TileArray{Float32, 2, spec2d}, ct.TileArray{Float32, 1, spec1d}})
 
@@ -50,6 +51,7 @@ function test1b(a::ct.TileArray{Float32, 2, spec2d}, b::ct.TileArray{Float32, 1,
     pid = ct.bid(1)
     tile = ct.load(a, pid, (4, 16))
     ct.mapreduce(abs, +, tile, 2)
+    return
 end
 ct.code_tiled(test1b, Tuple{ct.TileArray{Float32, 2, spec2d}, ct.TileArray{Float32, 1, spec1d}})
 
@@ -60,6 +62,7 @@ function test1c(a::ct.TileArray{Float32, 2, spec2d}, b::ct.TileArray{Float32, 1,
     pid = ct.bid(1)
     tile = ct.load(a, pid, (4, 16))
     ct.mapreduce(abs2, +, tile, 2)
+    return
 end
 ct.code_tiled(test1c, Tuple{ct.TileArray{Float32, 2, spec2d}, ct.TileArray{Float32, 1, spec1d}})
 
@@ -70,6 +73,7 @@ function test1d(a::ct.TileArray{Float32, 2, spec2d}, b::ct.TileArray{Float32, 1,
     pid = ct.bid(1)
     tile = ct.load(a, pid, (4, 16))
     ct.mapreduce(sqrt, +, tile, 2)
+    return
 end
 ct.code_tiled(test1d, Tuple{ct.TileArray{Float32, 2, spec2d}, ct.TileArray{Float32, 1, spec1d}})
 
@@ -80,6 +84,7 @@ function test1e(a::ct.TileArray{Float32, 2, spec2d}, b::ct.TileArray{Float32, 1,
     pid = ct.bid(1)
     tile = ct.load(a, pid, (4, 16))
     ct.mapreduce(sin, +, tile, 2)
+    return
 end
 ct.code_tiled(test1e, Tuple{ct.TileArray{Float32, 2, spec2d}, ct.TileArray{Float32, 1, spec1d}})
 
@@ -103,6 +108,7 @@ function test2a(a::ct.TileArray{Float32, 2, spec2d}, b::ct.TileArray{Float32, 1,
     pid = ct.bid(1)
     tile = ct.load(a, pid, (4, 16))
     ct.mapreduce(square, +, tile, 2)
+    return
 end
 ct.code_tiled(test2a, Tuple{ct.TileArray{Float32, 2, spec2d}, ct.TileArray{Float32, 1, spec1d}})
 
@@ -114,6 +120,7 @@ function test2b(a::ct.TileArray{Float32, 2, spec2d}, b::ct.TileArray{Float32, 1,
     pid = ct.bid(1)
     tile = ct.load(a, pid, (4, 16))
     ct.mapreduce(add_one, +, tile, 2)
+    return
 end
 ct.code_tiled(test2b, Tuple{ct.TileArray{Float32, 2, spec2d}, ct.TileArray{Float32, 1, spec1d}})
 
@@ -125,6 +132,7 @@ function test2c(a::ct.TileArray{Float32, 2, spec2d}, b::ct.TileArray{Float32, 1,
     pid = ct.bid(1)
     tile = ct.load(a, pid, (4, 16))
     ct.mapreduce(mul_two, *, tile, 2)
+    return
 end
 ct.code_tiled(test2c, Tuple{ct.TileArray{Float32, 2, spec2d}, ct.TileArray{Float32, 1, spec1d}})
 
@@ -142,6 +150,7 @@ function test3a(a::ct.TileArray{Float32, 2, spec2d}, b::ct.TileArray{Float32, 1,
     pid = ct.bid(1)
     tile = ct.load(a, pid, (4, 16))
     ct.mapreduce(identity, +, tile, 2)
+    return
 end
 ct.code_tiled(test3a, Tuple{ct.TileArray{Float32, 2, spec2d}, ct.TileArray{Float32, 1, spec1d}})
 
@@ -152,6 +161,7 @@ function test3b(a::ct.TileArray{Float32, 2, spec2d}, b::ct.TileArray{Float32, 1,
     pid = ct.bid(1)
     tile = ct.load(a, pid, (4, 16))
     ct.mapreduce(abs2, *, tile, 2)
+    return
 end
 ct.code_tiled(test3b, Tuple{ct.TileArray{Float32, 2, spec2d}, ct.TileArray{Float32, 1, spec1d}})
 
@@ -162,6 +172,7 @@ function test3c(a::ct.TileArray{Float32, 2, spec2d}, b::ct.TileArray{Float32, 1,
     pid = ct.bid(1)
     tile = ct.load(a, pid, (4, 16))
     ct.mapreduce(abs, max, tile, 2)
+    return
 end
 ct.code_tiled(test3c, Tuple{ct.TileArray{Float32, 2, spec2d}, ct.TileArray{Float32, 1, spec1d}})
 
@@ -172,6 +183,7 @@ function test3d(a::ct.TileArray{Float32, 2, spec2d}, b::ct.TileArray{Float32, 1,
     pid = ct.bid(1)
     tile = ct.load(a, pid, (4, 16))
     ct.mapreduce(identity, min, tile, 2)
+    return
 end
 ct.code_tiled(test3d, Tuple{ct.TileArray{Float32, 2, spec2d}, ct.TileArray{Float32, 1, spec1d}})
 
@@ -189,6 +201,7 @@ function test4a(a::ct.TileArray{Float32, 2, spec2d}, b::ct.TileArray{Float32, 1,
     pid = ct.bid(1)
     tile = ct.load(a, pid, (4, 16))
     ct.mapreduce(identity, +, tile, 1)
+    return
 end
 ct.code_tiled(test4a, Tuple{ct.TileArray{Float32, 2, spec2d}, ct.TileArray{Float32, 1, spec1d}})
 
@@ -199,6 +212,7 @@ function test4b(a::ct.TileArray{Float32, 2, spec2d}, b::ct.TileArray{Float32, 1,
     pid = ct.bid(1)
     tile = ct.load(a, pid, (4, 16))
     ct.mapreduce(identity, +, tile, 2)
+    return
 end
 ct.code_tiled(test4b, Tuple{ct.TileArray{Float32, 2, spec2d}, ct.TileArray{Float32, 1, spec1d}})
 
@@ -216,6 +230,7 @@ function test5a(a::ct.TileArray{Float64, 2, spec2d}, b::ct.TileArray{Float64, 1,
     pid = ct.bid(1)
     tile = ct.load(a, pid, (4, 16))
     ct.mapreduce(identity, +, tile, 2)
+    return
 end
 ct.code_tiled(test5a, Tuple{ct.TileArray{Float64, 2, spec2d}, ct.TileArray{Float64, 1, spec1d}})
 
@@ -226,6 +241,7 @@ function test5b(a::ct.TileArray{Int32, 2, spec2d}, b::ct.TileArray{Int32, 1, spe
     pid = ct.bid(1)
     tile = ct.load(a, pid, (4, 16))
     ct.mapreduce(identity, +, tile, 2)
+    return
 end
 ct.code_tiled(test5b, Tuple{ct.TileArray{Int32, 2, spec2d}, ct.TileArray{Int32, 1, spec1d}})
 
@@ -246,6 +262,7 @@ function test6a(a::ct.TileArray{Float32, 2, spec2d}, b::ct.TileArray{Float32, 1,
     pid = ct.bid(1)
     tile = ct.load(a, pid, (4, 16))
     ct.mapreduce(sqdiff, +, tile, 2)
+    return
 end
 ct.code_tiled(test6a, Tuple{ct.TileArray{Float32, 2, spec2d}, ct.TileArray{Float32, 1, spec1d}})
 
@@ -257,6 +274,7 @@ function test6b(a::ct.TileArray{Float32, 2, spec2d}, b::ct.TileArray{Float32, 1,
     pid = ct.bid(1)
     tile = ct.load(a, pid, (4, 16))
     ct.mapreduce(abs_dev, max, tile, 2)
+    return
 end
 ct.code_tiled(test6b, Tuple{ct.TileArray{Float32, 2, spec2d}, ct.TileArray{Float32, 1, spec1d}})
 
