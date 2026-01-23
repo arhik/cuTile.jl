@@ -758,7 +758,7 @@ end
     emit_mapreduce!(ctx, args) -> CGVal
 
 Emit bytecode for mapreduce operation.
-Args: [f, op, tile, axis, init?]
+Args: [f, op, tile, axis]
 
 The mapreduce operation applies f to each element, then reduces with op.
 """
@@ -766,7 +766,7 @@ function emit_mapreduce!(ctx::CGCtx, args::Vector{Any})
     cb = ctx.cb
     tt = ctx.tt
 
-    # Get arguments - handle optional init
+    # Get arguments
     f_arg = args[1]
     op_arg = args[2]
     tile_tv = emit_value!(ctx, args[3])
@@ -775,10 +775,6 @@ function emit_mapreduce!(ctx::CGCtx, args::Vector{Any})
     # Get axis from Val argument
     axis_val = @something get_constant(ctx, args[4]) error("Reduction axis must be a compile-time constant")
     axis = axis_val
-
-    # Optional init
-    init_present = length(args) > 4
-    init_tv = init_present ? emit_value!(ctx, args[5]) : nothing
 
     # Get element type and shapes
     input_type = unwrap_type(tile_tv.jltype)
@@ -795,7 +791,7 @@ function emit_mapreduce!(ctx::CGCtx, args::Vector{Any})
     scalar_tile_type = tile_type!(tt, dtype, Int[])
 
     # Determine reduction function and identity
-    reduce_fn, identity = determine_reduction_fn(ctx, op_arg, dtype, elem_type)
+    reduce_fn, identity = determine_reduction_fn(op_arg, dtype, elem_type)
 
     # Encode the reduction with custom body
     results = encode_ReduceOp!(cb, [output_tile_type], [tile_tv.v], axis, [identity], [scalar_tile_type]) do block_args
@@ -821,23 +817,7 @@ Identify the reduction function from the op argument.
 Returns (function_name, identity_value).
 """
 function determine_reduction_fn(@nospecialize(op_arg), dtype, ::Type{T}) where T
-    # Try to extract the function from various argument forms
-    fn = extract_function(op_arg)
-
-    if fn !== nothing
-        # Known function: match and return appropriate identity
-        if fn === (+)
-            return :add, operation_identity(Val(:add), dtype, T)
-        elseif fn === (*)
-            return :mul, operation_identity(Val(:mul), dtype, T)
-        elseif fn === max
-            return :max, operation_identity(Val(:max), dtype, T)
-        elseif fn === min
-            return :min, operation_identity(Val(:min), dtype, T)
-        end
-    end
-
-    # Unknown function - try to get name from GlobalRef
+    # Try to extract the function from GlobalRef or direct value
     if op_arg isa GlobalRef
         name = op_arg.name
         if name === :+
@@ -848,6 +828,23 @@ function determine_reduction_fn(@nospecialize(op_arg), dtype, ::Type{T}) where T
             return :max, operation_identity(Val(:max), dtype, T)
         elseif name === :min
             return :min, operation_identity(Val(:min), dtype, T)
+        end
+    elseif op_arg isa Function
+        # Direct function value
+        if op_arg === (+)
+            return :add, operation_identity(Val(:add), dtype, T)
+        elseif op_arg === (*)
+            return :mul, operation_identity(Val(:mul), dtype, T)
+        elseif op_arg === max
+            return :max, operation_identity(Val(:max), dtype, T)
+        elseif op_arg === min
+            return :min, operation_identity(Val(:min), dtype, T)
+        end
+    elseif op_arg isa Core.Builtin
+        if op_arg === Core.add
+            return :add, operation_identity(Val(:add), dtype, T)
+        elseif op_arg === Core.mul
+            return :mul, operation_identity(Val(:mul), dtype, T)
         end
     end
 
@@ -1339,12 +1336,12 @@ end
 # Define mapreduce intrinsic
 @eval Intrinsics begin
     """
-        mapreduce(f, op, tile, axis_val; init=nothing)
+        mapreduce(f, op, tile, axis_val)
 
     Apply f to each element, then reduce with op.
     Axis is 0-indexed (converted from 1-indexed in public API).
     """
-    @noinline function mapreduce(f::Function, op::Function, tile::Tile{T, S}, ::Val{axis}; init=nothing) where {T, S, axis}
+    @noinline function mapreduce(f::Function, op::Function, tile::Tile{T, S}, ::Val{axis}) where {T, S, axis}
         reduced_shape = ntuple(i -> S[i < axis + 1 ? i : i + 1], length(S) - 1)
         Tile{T, reduced_shape}()
     end

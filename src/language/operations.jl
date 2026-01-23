@@ -570,7 +570,6 @@ If `init` is provided, it will be used as the initial value for the reduction.
 - `op`: Binary function to use for reduction (e.g., `+`, `*`, `max`, `min`)
 - `tile`: Input tile to map and reduce
 - `axis`: Axis to reduce along (1-indexed)
-- `init`: Optional initial value for the reduction
 
 # Supported Functions
 Map functions: `identity`, `abs`, `abs2` (square), `sqrt`, `exp`, `log`, `sin`, `cos`, `neg` (unary minus)
@@ -583,15 +582,14 @@ A tile with the specified dimension removed.
 ```julia
 # Sum of squares: mapreduce(x -> x^2, +, tile, 1)
 # Max of absolute values: mapreduce(abs, max, tile, 2)
-# Product with custom init: mapreduce(x -> x + 1, *, tile, 1; init=1)
 ```
 """
-@inline function mapreduce(f::Function, op::Function, tile::Tile{T, S}, axis::Integer; init=nothing) where {T <: Number, S}
-    Intrinsics.mapreduce(f, op, tile, Val(axis - 1); init)
+@inline function mapreduce(f::Function, op::Function, tile::Tile{T, S}, axis::Integer) where {T <: Number, S}
+    Intrinsics.mapreduce(f, op, tile, Val(axis - 1))
 end
 
-@inline function mapreduce(f::Function, op::Function, tile::Tile{T, S}, ::Val{axis}; init=nothing) where {T <: Number, S, axis}
-    Intrinsics.mapreduce(f, op, tile, Val(axis); init)
+@inline function mapreduce(f::Function, op::Function, tile::Tile{T, S}, ::Val{axis}) where {T <: Number, S, axis}
+    Intrinsics.mapreduce(f, op, tile, Val(axis))
 end
 
 #=============================================================================

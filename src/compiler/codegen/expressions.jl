@@ -67,7 +67,7 @@ function emit_call!(ctx::CGCtx, expr::Expr, @nospecialize(result_type))
 
     # Special handling for mapreduce with anonymous functions
     # Try to detect and inline lambda bodies
-    if func === Intrinsics.mapreduce || func === Intrinsics.mapreduce_noinit || func === Intrinsics.mapreduce_withinit
+    if func === Intrinsics.mapreduce
         if length(call_args) >= 2
             # Try to extract lambda body from first argument
             lambda_body = try_extract_lambda(ctx, call_args[1])
