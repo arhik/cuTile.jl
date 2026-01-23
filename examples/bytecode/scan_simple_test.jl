@@ -145,7 +145,6 @@ function test_all()
     benchmark()
     println(repeat("=", 60))
     println("ALL TESTS PASSED")
-    println("Note: Full disassembly requires cuTile's internal compiler pipeline")
     println(repeat("=", 60))
 end
 
