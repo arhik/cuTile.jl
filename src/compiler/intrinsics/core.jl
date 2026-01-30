@@ -581,22 +581,13 @@ end
 #=============================================================================#
 
 """
-    operation_identity(fn, dtype, elem_type) -> IdentityVal
     to_uint128(value)
 
 Convert an integer value to UInt128 for storage in IntegerIdentityVal.
 For signed types, this returns the two's complement bit representation.
 """
-# Unsigned types: directly convert
-to_uint128(value::UInt64) = UInt128(value)
-to_uint128(value::UInt32) = UInt128(value)
-to_uint128(value::UInt16) = UInt128(value)
-to_uint128(value::UInt8) = UInt128(value)
-# Signed types: reinterpret as unsigned first, then convert
-to_uint128(value::Int64) = UInt128(reinterpret(UInt64, value))
-to_uint128(value::Int32) = UInt128(reinterpret(UInt32, value))
-to_uint128(value::Int16) = UInt128(reinterpret(UInt16, value))
-to_uint128(value::Int8) = UInt128(reinterpret(UInt8, value))
+to_uint128(value::T) where T <: Unsigned = UInt128(value)
+to_uint128(value::T) where T <: Signed = UInt128(reinterpret(unsigned(T), value))
 
 """
     operation_identity(fn, dtype, elem_type) -> IdentityVal

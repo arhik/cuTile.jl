@@ -313,7 +313,6 @@ function mask_to_width(value::UInt128, ::Type{T}) where T <: Integer
     end
 end
 
-
 """
     float_to_bits(value, dtype)
 
