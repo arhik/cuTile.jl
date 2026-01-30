@@ -181,6 +181,13 @@ function TileArray(arr::AbstractArray{T, N}) where {T, N}
     TileArray(ptr, sizes, strides_val)
 end
 
+function TileArray(arr::PermutedDimsArray{T, N}) where {T, N}
+    ptr = reinterpret(Ptr{T}, pointer(parent(arr)))
+    sizes = NTuple{N, Int32}(Int32.(size(arr)))
+    strides_val = NTuple{N, Int32}(Int32.(strides(arr)))
+    TileArray(ptr, sizes, strides_val)
+end
+
 
 """
     Tile{T, Shape}
