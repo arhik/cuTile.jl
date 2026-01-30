@@ -569,7 +569,7 @@ function emit_reduce!(ctx::CGCtx, args, reduce_fn::Symbol)
     results = encode_ReduceOp!(cb, [output_tile_type], [input_tv.v], axis, [identity], [scalar_tile_type]) do block_args
         acc, elem = block_args[1], block_args[2]
 
-        res = encode_reduce_body(cb, scalar_tile_type, acc, elem, reduce_fn, elem_type)
+        res = encode_binop_body(cb, scalar_tile_type, acc, elem, reduce_fn, elem_type)
         encode_YieldOp!(cb, [res])
     end
 
@@ -609,26 +609,18 @@ operation_identity(::Val{:max}, dtype, ::Type{T}) where T <: Integer =
     IntegerIdentityVal(to_uint128(typemin(T)), dtype, T)
 
 #=============================================================================#
-# Reduce Body Operations
+# Binary Operation Body Encoding (shared by reduce and scan)
 #=============================================================================#
-function encode_reduce_body(cb, type, acc, elem, op::Symbol, ::Type{T}) where T
+function encode_binop_body(cb, type, acc, elem, op::Symbol, ::Type{T}) where T
     if T <: AbstractFloat
-        if op == :add
-            encode_AddFOp!(cb, type, acc, elem)
-        elseif op == :max
-            encode_MaxFOp!(cb, type, acc, elem)
-        else
-            error("Unsupported float reduction operation: $op")
-        end
-    else  # Integer
+        op == :add ? encode_AddFOp!(cb, type, acc, elem) :
+        op == :max ? encode_MaxFOp!(cb, type, acc, elem) :
+        error("Unsupported float operation: $op")
+    else
         signedness = T <: Signed ? SignednessSigned : SignednessUnsigned
-        if op == :add
-            encode_AddIOp!(cb, type, acc, elem)
-        elseif op == :max
-            encode_MaxIOp!(cb, type, acc, elem; signedness)
-        else
-            error("Unsupported integer reduction operation: $op")
-        end
+        op == :add ? encode_AddIOp!(cb, type, acc, elem) :
+        op == :max ? encode_MaxIOp!(cb, type, acc, elem; signedness) :
+        error("Unsupported integer operation: $op")
     end
 end
 
@@ -757,29 +749,17 @@ function emit_intrinsic!(ctx::CGCtx, ::typeof(Intrinsics.scan), args)
     scalar_tile_type = tile_type!(tt, dtype, Int[])
 
     # Create identity value using operation_identity
-    # Reuses FloatIdentityOp and IntegerIdentityOp from IntegerReduce
     identity = operation_identity(Val(fn_type), dtype, elem_type)
 
     # Emit ScanOp
     results = encode_ScanOp!(cb, [output_tile_type], [input_tv.v], axis, reverse, [identity], [scalar_tile_type]) do block_args
         acc, elem = block_args[1], block_args[2]
-        res = encode_scan_body(cb, scalar_tile_type, acc, elem, Val(fn_type), elem_type)
+        res = encode_binop_body(cb, scalar_tile_type, acc, elem, fn_type, elem_type)
         encode_YieldOp!(cb, [res])
     end
 
-
     CGVal(results[1], output_tile_type, Tile{elem_type, Tuple(output_shape)}, output_shape)
 end
-
-# Dispatch helpers for scan body operations - dispatch on Val{fn} and elem_type
-encode_scan_body(cb, type, acc, elem, ::Val{:add}, ::Type{T}) where T <: AbstractFloat =
-    encode_AddFOp!(cb, type, acc, elem)
-encode_scan_body(cb, type, acc, elem, ::Val{:add}, ::Type{T}) where T <: Integer =
-    encode_AddIOp!(cb, type, acc, elem)
-encode_scan_body(cb, type, acc, elem, ::Val{:max}, ::Type{T}) where T <: AbstractFloat =
-    encode_MaxFOp!(cb, type, acc, elem)
-encode_scan_body(cb, type, acc, elem, ::Val{:max}, ::Type{T}) where T <: Integer =
-    encode_MaxIOp!(cb, type, acc, elem; signedness=is_signed(T) ? SignednessSigned : SignednessUnsigned)
 
 # cuda_tile.select
 @eval Intrinsics begin
